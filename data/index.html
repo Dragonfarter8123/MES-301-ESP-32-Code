@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Wind Test Station | Lift & Drag</title>
+<style>
+:root{
+  --navy:#173a67;
+  --navy2:#244d7d;
+  --blue:#2f6ee5;
+  --light:#eef4fa;
+  --card:#ffffff;
+  --border:#d5e0eb;
+  --text:#183047;
+  --muted:#6d7d8e;
+  --green:#2e9b62;
+  --red:#d9534f;
+  --yellow:#d99a21;
+  --shadow:0 2px 8px rgba(20,48,75,.08);
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:Arial,Helvetica,sans-serif;
+  background:#f5f8fb;
+  color:var(--text);
+}
+.topbar{
+  background:var(--navy);
+  color:white;
+  padding:15px 22px;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  border-bottom:4px solid #2e638f;
+}
+.brand{font-size:22px;font-weight:700;letter-spacing:.2px}
+.subtitle{font-size:12px;opacity:.8;margin-top:3px}
+.status-pill{
+  display:flex;align-items:center;gap:8px;
+  background:rgba(255,255,255,.12);
+  border:1px solid rgba(255,255,255,.22);
+  border-radius:20px;padding:7px 12px;font-size:12px
+}
+.dot{width:9px;height:9px;border-radius:50%;background:#48c982}
+.container{max-width:1180px;margin:20px auto;padding:0 16px}
+.grid{display:grid;grid-template-columns:1.35fr .85fr;gap:18px}
+.card{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:8px;
+  box-shadow:var(--shadow);
+}
+.card-header{
+  padding:13px 16px;
+  border-bottom:1px solid var(--border);
+  font-weight:700;
+  color:var(--navy);
+  display:flex;justify-content:space-between;align-items:center
+}
+.card-body{padding:16px}
+label{font-size:12px;font-weight:700;color:#506477;display:block;margin-bottom:6px}
+input,select{
+  width:100%;padding:10px 11px;border:1px solid #cbd7e3;
+  border-radius:5px;background:white;color:var(--text);font-size:14px
+}
+input:focus,select:focus{outline:2px solid #bdd2ee;border-color:var(--blue)}
+.form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.form-grid.two{grid-template-columns:1fr 1fr}
+.range-row{display:flex;gap:10px;align-items:center}
+input[type=range]{padding:0;accent-color:var(--blue)}
+.range-value{min-width:58px;text-align:right;font-weight:700;color:var(--navy)}
+.actions{display:flex;gap:9px;margin-top:15px;flex-wrap:wrap}
+button{
+  border:0;border-radius:5px;padding:10px 16px;font-size:13px;font-weight:700;
+  cursor:pointer;transition:.15s transform,.15s opacity
+}
+button:active{transform:scale(.98)}
+.primary{background:var(--blue);color:white}
+.secondary{background:#e8eef5;color:var(--navy)}
+.success{background:var(--green);color:white}
+.danger{background:var(--red);color:white}
+.warning{background:var(--yellow);color:white}
+button:disabled{opacity:.5;cursor:not-allowed}
+.status-box{
+  background:#f7fafc;border:1px solid var(--border);border-radius:6px;
+  padding:12px;margin-bottom:12px
+}
+.status-row{display:flex;justify-content:space-between;padding:5px 0;font-size:13px}
+.status-row span:first-child{color:var(--muted)}
+.status-row span:last-child{font-weight:700}
+.measurements{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.measure{
+  border:1px solid var(--border);border-radius:7px;padding:15px;
+  background:linear-gradient(#fff,#f8fbfe)
+}
+.measure .name{font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.measure .value{font-size:31px;font-weight:700;color:var(--navy);margin:6px 0 2px}
+.measure .unit{font-size:12px;color:var(--muted)}
+.measure.lift{border-left:4px solid var(--blue)}
+.measure.drag{border-left:4px solid #5f7ea1}
+.chart-wrap{height:285px;position:relative}
+canvas{width:100%;height:100%;display:block}
+.legend{display:flex;gap:18px;font-size:11px;color:var(--muted);margin-top:7px}
+.legend span{display:flex;align-items:center;gap:5px}
+.swatch{width:18px;height:3px;border-radius:2px;background:var(--blue)}
+.swatch.drag{background:#5f7ea1}
+.notice{
+  padding:10px 12px;border-radius:5px;background:#edf5ff;
+  border:1px solid #c9ddf4;color:#335879;font-size:12px;line-height:1.45;margin-top:12px
+}
+.footer{
+  text-align:center;color:#8190a0;font-size:11px;margin:18px 0 28px
+}
+.section-title{font-size:13px;font-weight:700;color:var(--navy);margin:17px 0 10px}
+.big-speed{
+  display:flex;align-items:baseline;gap:7px;margin-bottom:13px
+}
+.big-speed strong{font-size:36px;color:var(--navy)}
+.big-speed span{font-size:13px;color:var(--muted)}
+.cal-badge{
+  font-size:10px;background:#e9f6ef;color:#27744b;border:1px solid #c4e5d2;
+  padding:4px 7px;border-radius:12px
+}
+.small{font-size:11px;color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:11px}
+th,td{padding:7px;border-bottom:1px solid var(--border);text-align:left}
+th{color:var(--navy);background:#eef4fa}
+@media(max-width:850px){
+  .grid{grid-template-columns:1fr}
+  .form-grid{grid-template-columns:1fr 1fr}
+}
+@media(max-width:520px){
+  .topbar{padding:12px 14px}.brand{font-size:18px}
+  .container{padding:0 10px;margin-top:12px}
+  .form-grid,.form-grid.two{grid-template-columns:1fr}
+  .measurements{grid-template-columns:1fr 1fr}
+  .measure .value{font-size:25px}
+}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <div class="brand">Wind Test Station</div>
+    <div class="subtitle">MES 301 • Lift & Drag Measurement System</div>
+  </div>
+  <div class="status-pill"><span class="dot" id="statusDot"></span><span id="connectionText">ESP32 Connected</span></div>
+</header>
+
+<main class="container">
+  <div class="grid">
+    <section>
+      <div class="card">
+        <div class="card-header">
+          <span>Test Configuration</span>
+          <span class="cal-badge" id="calStatus">Calibration Loaded</span>
+        </div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div>
+              <label for="team">Team / Calibration</label>
+              <select id="team">
+                <option>Team Alpha</option>
+                <option>Team Beta</option>
+                <option>Team 3</option>
+              </select>
+            </div>
+            <div>
+              <label for="object">Test Object</label>
+              <select id="object">
+                <option>NACA 4424</option>
+                <option>NACA 6412</option>
+              </select>
+            </div>
+            <div>
+              <label for="units">Force Units</label>
+              <select id="units">
+                <option value="N">Newton (N)</option>
+                <option value="lbf">Pounds-force (lbf)</option>
+                <option value="g">Grams (g)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="section-title">Wind Speed Setpoint</div>
+          <div class="range-row">
+            <input id="speed" type="range" min="20" max="40" value="25" step="0.5">
+            <div class="range-value"><span id="speedValue">25.0</span> mph</div>
+          </div>
+
+          <div class="form-grid two" style="margin-top:13px">
+            <div>
+              <label for="duration">Measurement Duration</label>
+              <select id="duration">
+                <option value="10">10 seconds</option>
+                <option value="20">20 seconds</option>
+                <option value="30" selected>30 seconds</option>
+                <option value="60">60 seconds</option>
+              </select>
+            </div>
+            <div>
+              <label for="sampleRate">Sampling</label>
+              <select id="sampleRate">
+                <option>10 Hz</option>
+                <option selected>20 Hz</option>
+                <option>50 Hz</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="primary" id="startBtn" onclick="startTest()">Start Test</button>
+            <button class="danger" id="stopBtn" onclick="stopTest()" disabled>Stop</button>
+            <button class="secondary" onclick="zeroLoadCells()">Zero Load Cells</button>
+          </div>
+          <div class="notice">
+            Operating range: <b>20–40 mph</b>. The dashboard displays simultaneous lift and drag measurements and can log force-versus-air-speed data for CSV export.
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:18px">
+        <div class="card-header">
+          <span>Real-Time Measurements</span>
+          <span class="small" id="testState">Ready</span>
+        </div>
+        <div class="card-body">
+          <div class="measurements">
+            <div class="measure lift">
+              <div class="name">Lift</div>
+              <div class="value" id="liftValue">0.00</div>
+              <div class="unit" id="liftUnit">N</div>
+            </div>
+            <div class="measure drag">
+              <div class="name">Drag</div>
+              <div class="value" id="dragValue">0.00</div>
+              <div class="unit" id="dragUnit">N</div>
+            </div>
+          </div>
+
+          <div class="section-title">Measurement History</div>
+          <div class="chart-wrap"><canvas id="chart"></canvas></div>
+          <div class="legend">
+            <span><i class="swatch"></i> Lift</span>
+            <span><i class="swatch drag"></i> Drag</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside>
+      <div class="card">
+        <div class="card-header"><span>Station Status</span></div>
+        <div class="card-body">
+          <div class="status-box">
+            <div class="status-row"><span>ESP32</span><span id="espStatus">Connected</span></div>
+            <div class="status-row"><span>Wind Tunnel</span><span id="tunnelStatus">Ready</span></div>
+            <div class="status-row"><span>Current Speed</span><span><span id="currentSpeed">0.0</span> mph</span></div>
+            <div class="status-row"><span>ADC</span><span id="adcStatus">Checking...</span></div>
+            <div class="status-row"><span>Channels</span><span>Lift + Drag</span></div>
+            <div class="status-row"><span>Calibration</span><span id="sideCal">Loaded</span></div>
+          </div>
+
+          <button class="primary" style="width:100%" onclick="openCalibration()">Calibration Setup</button>
+          <button class="secondary" style="width:100%;margin-top:8px" onclick="exportCSV()">Download CSV</button>
+
+          <div class="section-title">Quick Data</div>
+          <table>
+            <tr><th>Parameter</th><th>Value</th></tr>
+            <tr><td>Setpoint</td><td><span id="tableSpeed">25.0</span> mph</td></tr>
+            <tr><td>Object</td><td id="tableObject">NACA 4424</td></tr>
+            <tr><td>Units</td><td id="tableUnits">N</td></tr>
+            <tr><td>Samples</td><td id="sampleCount">0</td></tr>
+          </table>
+
+          <div class="notice">
+            <b>System concept:</b><br>
+            ESP-10 Load Cells → Amplifier → ADS1115 → ESP-32 → Calibration → User Interface
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:18px">
+        <div class="card-header"><span>Calibration</span><span class="small">Zero + curve correction</span></div>
+        <div class="card-body">
+          <div class="status-row"><span>Zero balance</span><span id="zeroStatus">Set</span></div>
+          <div class="status-row"><span>Non-linearity</span><span>Polynomial</span></div>
+          <div class="status-row"><span>Hysteresis</span><span>Supported</span></div>
+          <div class="status-row"><span>Target accuracy</span><span>±5%</span></div>
+          <div class="actions">
+            <button class="secondary" onclick="runCalibration()">Run Calibration</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="footer">MES 301 • Electrical Engineering Systems • Lift & Drag Measurement System</div>
+</main>
+
+<script>
+/*
+  ESP32 API hooks
+  ----------------
+  Expected optional endpoints:
+    GET  /api/status
+    GET  /api/data
+    POST /api/start       JSON: {speed, object, units, duration, sampleRate}
+    POST /api/stop
+    POST /api/zero
+    POST /api/calibration
+    GET  /api/export.csv
+
+*/
+
+const API = {
+  status:'/api/status',
+  data:'/api/data',
+  start:'/api/start',
+  stop:'/api/stop',
+  zero:'/api/zero',
+  calibration:'/api/calibration',
+  csv:'/api/export.csv'
+};
+
+let running = false;
+let samples = [];
+let timer = null;
+
+const $ = id => document.getElementById(id);
+
+$('speed').addEventListener('input', e => {
+  $('speedValue').textContent = Number(e.target.value).toFixed(1);
+  $('tableSpeed').textContent = Number(e.target.value).toFixed(1);
+});
+$('object').addEventListener('change', e => $('tableObject').textContent = e.target.value);
+$('units').addEventListener('change', e => {
+  $('tableUnits').textContent = e.target.value;
+  $('liftUnit').textContent = e.target.value;
+  $('dragUnit').textContent = e.target.value;
+  updateDisplay(lastLift, lastDrag);
+});
+
+let lastLift=0, lastDrag=0;
+
+function toUnits(n){
+  const u=$('units').value;
+  if(u==='lbf') return n*0.224809;
+  if(u==='g') return n*101.9716;
+  return n;
+}
+function fmt(n){
+  const u=$('units').value;
+  if(u==='g') return n.toFixed(1);
+  return n.toFixed(3);
+}
+function updateDisplay(lift,drag){
+  lastLift=lift; lastDrag=drag;
+  $('liftValue').textContent=fmt(toUnits(lift));
+  $('dragValue').textContent=fmt(toUnits(drag));
+  $('liftUnit').textContent=$('units').value;
+  $('dragUnit').textContent=$('units').value;
+}
+
+async function post(url, body){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const result=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(result.error||('HTTP '+r.status));
+  return result;
+}
+
+async function startTest(){
+  if(running)return;
+  const body={
+    speed:Number($('speed').value),
+    object:$('object').value,
+    units:$('units').value,
+    team:$('team').value,
+    duration:Number($('duration').value),
+    sampleRate:$('sampleRate').value
+  };
+  try{
+    await post(API.start,body);
+    running=true; samples=[];
+    $('startBtn').disabled=true; $('stopBtn').disabled=false;
+    $('testState').textContent='Testing';
+    $('tunnelStatus').textContent='Running';
+    $('sampleCount').textContent='0';
+    clearInterval(timer);
+    timer=setInterval(readData,250);
+    await readData();
+  }catch(e){
+    alert('Could not start test: '+e.message);
+  }
+}
+async function stopTest(){
+  if(!running)return;
+  try{
+    await post(API.stop,{});
+    running=false; clearInterval(timer); timer=null;
+    $('startBtn').disabled=false; $('stopBtn').disabled=true;
+    $('testState').textContent='Ready';
+    $('tunnelStatus').textContent='Ready';
+    $('currentSpeed').textContent='0.0';
+  }catch(e){
+    alert('Could not stop test: '+e.message);
+  }
+}
+async function zeroLoadCells(){
+  try{
+    await post(API.zero,{});
+    $('zeroStatus').textContent='Set';
+    updateDisplay(0,0);
+    samples=[];
+    $('sampleCount').textContent='0';
+    drawChart();
+  }catch(e){
+    alert('Could not zero load cells: '+e.message);
+  }
+}
+async function openCalibration(){
+  alert('Calibration setup: apply known loads, collect load-cell outputs, calculate zero balance, fit the calibration curve, then save the result to the ESP32.');
+}
+async function runCalibration(){
+  try{
+    await post(API.calibration,{object:$('object').value,team:$('team').value});
+    $('calStatus').textContent='Calibration Loaded';
+    $('sideCal').textContent='Loaded';
+    alert('Calibration command sent to ESP32.');
+  }catch(e){
+    alert('Could not calibrate: '+e.message);
+  }
+}
+async function readData(){
+  try{
+    const r=await fetch(API.data,{cache:'no-store'});
+    if(!r.ok) throw new Error('Measurement hardware unavailable (HTTP '+r.status+')');
+    const d=await r.json();
+    setData(Number(d.lift),Number(d.drag),Number(d.speed));
+  }catch(e){
+    $('testState').textContent='Data unavailable';
+    $('connectionText').textContent='ESP32 connected · data unavailable';
+  }
+}
+function setData(lift,drag,speed){
+  updateDisplay(lift,drag);
+  $('currentSpeed').textContent=Number(speed).toFixed(1);
+  samples.push({time:new Date().toISOString(),speed,lift,drag});
+  if(samples.length>120)samples.shift();
+  $('sampleCount').textContent=samples.length;
+  drawChart();
+}
+function exportCSV(){
+  window.location.href=API.csv;
+}
+function drawChart(){
+  const c=$('chart'), ctx=c.getContext('2d');
+  const dpr=window.devicePixelRatio||1;
+  const rect=c.getBoundingClientRect();
+  c.width=rect.width*dpr; c.height=rect.height*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const w=rect.width,h=rect.height;
+  ctx.clearRect(0,0,w,h);
+
+  const pad={l:42,r:12,t:12,b:28};
+  const pw=w-pad.l-pad.r, ph=h-pad.t-pad.b;
+  ctx.strokeStyle='#dbe4ec'; ctx.lineWidth=1;
+  for(let i=0;i<=4;i++){
+    const y=pad.t+ph*i/4;
+    ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+pw,y);ctx.stroke();
+  }
+  for(let i=0;i<=5;i++){
+    const x=pad.l+pw*i/5;
+    ctx.beginPath();ctx.moveTo(x,pad.t);ctx.lineTo(x,pad.t+ph);ctx.stroke();
+  }
+
+  if(samples.length<2){
+    ctx.fillStyle='#8a99a8';ctx.font='12px Arial';
+    ctx.textAlign='center';ctx.fillText('Start a test to view real-time data',pad.l+pw/2,pad.t+ph/2);
+    return;
+  }
+  const max=Math.max(0.1,...samples.map(s=>Math.max(s.lift,s.drag)))*1.15;
+  const min=0;
+  const x=i=>pad.l+pw*(i/(samples.length-1));
+  const y=v=>pad.t+ph*(1-(v-min)/(max-min));
+
+  ctx.font='10px Arial';ctx.fillStyle='#718294';ctx.textAlign='right';
+  for(let i=0;i<=4;i++)ctx.fillText((max*(1-i/4)).toFixed(2),pad.l-6,pad.t+ph*i/4+3);
+
+  function line(key,dash){
+    ctx.strokeStyle=key==='lift'?'#2f6ee5':'#5f7ea1';
+    ctx.lineWidth=2;ctx.setLineDash(dash?[4,3]:[]);
+    ctx.beginPath();
+    samples.forEach((s,i)=>{const xx=x(i),yy=y(s[key]);i?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy)});
+    ctx.stroke();ctx.setLineDash([]);
+  }
+  line('lift',false); line('drag',true);
+
+  ctx.fillStyle='#718294';ctx.textAlign='center';
+  ctx.fillText('Samples / time',pad.l+pw/2,h-7);
+}
+window.addEventListener('resize',drawChart);
+
+async function checkStatus(){
+  try{
+    const r=await fetch(API.status,{cache:'no-store'});
+    if(r.ok){
+      const d=await r.json();
+      const hardwareReady=Boolean(d.adsAvailable);
+      $('connectionText').textContent=hardwareReady?'ESP32 Connected':'ESP32 Connected · ADS1115 missing';
+      $('espStatus').textContent='Connected';
+      $('adcStatus').textContent=hardwareReady?'ADS1115 • 16-bit':'Not found';
+      $('statusDot').style.background=hardwareReady?'#48c982':'#d99a21';
+      if(d.speed!==undefined)$('currentSpeed').textContent=Number(d.speed).toFixed(1);
+      if(d.tunnelStatus)$('tunnelStatus').textContent=d.tunnelStatus;
+      if(d.zeroed!==undefined)$('zeroStatus').textContent=d.zeroed?'Set':'Not set';
+      if(d.calibrationLoaded!==undefined){
+        $('calStatus').textContent=d.calibrationLoaded?'Calibration Loaded':'Not calibrated';
+        $('sideCal').textContent=d.calibrationLoaded?'Loaded':'Not loaded';
+      }
+      if(d.running!==undefined){
+        running=Boolean(d.running);
+        $('startBtn').disabled=running;
+        $('stopBtn').disabled=!running;
+        $('testState').textContent=running?'Testing':'Ready';
+      }
+      return;
+    }
+  }catch(e){}
+  $('connectionText').textContent='ESP32 unavailable';
+  $('espStatus').textContent='Disconnected';
+  $('adcStatus').textContent='Unknown';
+  $('statusDot').style.background='#d99a21';
+}
+checkStatus();
+setInterval(checkStatus,5000);
+drawChart();
+</script>
+</body>
+</html>
