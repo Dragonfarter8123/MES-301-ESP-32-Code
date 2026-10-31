@@ -1,64 +1,64 @@
 
-#include <SPIFFS.h>
-#include <WiFi.h>
-#include "Calculations.h"
-#include "Config.h"
-#include "Inputs.h"
-#include "UserInterface.h"
-#include "WindTunnelControl.h"
+#include <Wire.h>
+#include <Adafruit_ADS1X15.h>
+
+Adafruit_ADS1115 ads;
+
+// Differential channel pairs
+// Lift: A0 (+), A1 (-)
+// Drag: A2 (+), A3 (-)
 
 void setup() {
   Serial.begin(115200);
-  delay(200);
-  Serial.println("\nMES 301 Wind Tunnel Controller");
+  delay(1000);
 
-  Inputs::begin();
-  Calculations::begin();
-  WindTunnelControl::begin();
+  // ESP32 I2C pins: SDA = GPIO 21, SCL = GPIO 22
+  Wire.begin(21, 22);
 
-  const bool filesystemAvailable = SPIFFS.begin(false);
-  if (!filesystemAvailable) {
-    Serial.println("SPIFFS mount failed; web API will still start.");
-  }
+  Serial.println("\nESP32 + ADS1115 Dual Load Cell Test");
+  Serial.println("-----------------------------------");
 
-  WiFi.mode(WIFI_STA);
-  bool wifiConnected = false;
-  if (Config::WIFI_SSID[0] != '\0') {
-    WiFi.begin(Config::WIFI_SSID, Config::WIFI_PASSWORD);
-    Serial.print("Connecting to configured Wi-Fi");
-    const uint32_t startedAt = millis();
-    while (WiFi.status() != WL_CONNECTED &&
-           millis() - startedAt < Config::WIFI_CONNECT_TIMEOUT_MS) {
-      delay(250);
-      Serial.print('.');
-    }
-    wifiConnected = WiFi.status() == WL_CONNECTED;
-  }
+  if (!ads.begin(0x48, &Wire)) {
+    Serial.println("ERROR: ADS1115 not detected.");
+    Serial.println("Check VIN, GND, SDA, and SCL.");
 
-  if (wifiConnected) {
-    Serial.println();
-    Serial.print("IP Address: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println();
-    Serial.println("Configured Wi-Fi unavailable; starting fallback access point.");
-    WiFi.mode(WIFI_AP);
-    if (WiFi.softAP(Config::FALLBACK_AP_SSID,
-                    Config::FALLBACK_AP_PASSWORD)) {
-      Serial.print("Access point: ");
-      Serial.println(Config::FALLBACK_AP_SSID);
-      Serial.print("AP IP Address: ");
-      Serial.println(WiFi.softAPIP());
-    } else {
-      Serial.println("ERROR: Could not start fallback access point.");
+    while (true) {
+      delay(100);
     }
   }
 
-  UserInterface::begin(filesystemAvailable);
+
+  // +/- 4.096 V full-scale range
+  ads.setGain(GAIN_SIXTEEN);
+
+  Serial.println("ADS1115 detected!");
+  Serial.println("Lift: A0-A1 | Drag: A2-A3");
+  Serial.println();
 }
 
 void loop() {
-  WindTunnelControl::update();
-  Inputs::printDiagnosticsIfDue();
-  delay(5);
+  // Read differential voltage for lift
+  int16_t liftRaw = ads.readADC_Differential_0_1();
+
+  // Read differential voltage for drag
+  int16_t dragRaw = ads.readADC_Differential_2_3();
+
+  // Convert ADC readings to volts
+  float liftVolts = ads.computeVolts(liftRaw);
+  float dragVolts = ads.computeVolts(dragRaw);
+
+  Serial.print("Lift raw: ");
+  Serial.print(liftRaw);
+  Serial.print(" | Lift differential: ");
+  Serial.print(liftVolts, 6);
+  Serial.print(" V");
+
+  Serial.print(" || Drag raw: ");
+  Serial.print(dragRaw);
+  Serial.print(" | Drag differential: ");
+  Serial.print(dragVolts, 6);
+  Serial.println(" V");
+
+  delay(1000);
 }
+
