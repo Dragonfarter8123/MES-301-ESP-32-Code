@@ -257,7 +257,7 @@ th{color:var(--navy);background:#eef4fa}
           <div class="status-box">
             <div class="status-row"><span>ESP32</span><span id="espStatus">Connected</span></div>
             <div class="status-row"><span>Wind Tunnel</span><span id="tunnelStatus">Ready</span></div>
-            <div class="status-row"><span>Current Speed</span><span><span id="currentSpeed">0.0</span> mph</span></div>
+            <div class="status-row"><span>Speed Setpoint</span><span><span id="currentSpeed">0.0</span> mph</span></div>
             <div class="status-row"><span>ADC</span><span id="adcStatus">Checking...</span></div>
             <div class="status-row"><span>Channels</span><span>Lift + Drag</span></div>
             <div class="status-row"><span>Calibration</span><span id="sideCal">Loaded</span></div>
@@ -382,11 +382,15 @@ async function startTest(){
     sampleRate:$('sampleRate').value
   };
   try{
-    await post(API.start,body);
+    const result=await post(API.start,body);
     running=true; samples=[];
     $('startBtn').disabled=true; $('stopBtn').disabled=false;
     $('testState').textContent='Testing';
     $('tunnelStatus').textContent='Running';
+    if(result.fanControlEnabled===false){
+      $('tunnelStatus').textContent='Fan output disabled';
+      alert('Measurement started, but fan PWM output is disabled in include/Config.h.');
+    }
     $('sampleCount').textContent='0';
     clearInterval(timer);
     timer=setInterval(readData,250);
@@ -421,11 +425,21 @@ async function zeroLoadCells(){
   }
 }
 async function openCalibration(){
-  alert('Calibration setup: apply known loads, collect load-cell outputs, calculate zero balance, fit the calibration curve, then save the result to the ESP32.');
+  alert('Calibration procedure:\n1. Remove all loads and use Zero Load Cells.\n2. Apply a known force to the lift cell and drag cell.\n3. Run Calibration and enter each applied force in newtons.\n\nConfigure each AD623 gain resistor and verified REF voltage in include/Config.h first.');
 }
 async function runCalibration(){
+  const liftForce=prompt('Apply a known load to the lift cell and enter its force in newtons (mass in kg × 9.80665).');
+  if(liftForce===null)return;
+  const dragForce=prompt('Apply a known load to the drag cell and enter its force in newtons (mass in kg × 9.80665).');
+  if(dragForce===null)return;
+  const liftKnownForceN=Number(liftForce), dragKnownForceN=Number(dragForce);
+  if(!Number.isFinite(liftKnownForceN)||liftKnownForceN<=0||
+     !Number.isFinite(dragKnownForceN)||dragKnownForceN<=0){
+    alert('Enter positive, finite calibration forces in newtons.');
+    return;
+  }
   try{
-    await post(API.calibration,{object:$('object').value,team:$('team').value});
+    await post(API.calibration,{liftKnownForceN,dragKnownForceN});
     $('calStatus').textContent='Calibration Loaded';
     $('sideCal').textContent='Loaded';
     alert('Calibration command sent to ESP32.');
@@ -438,6 +452,12 @@ async function readData(){
     const r=await fetch(API.data,{cache:'no-store'});
     if(!r.ok) throw new Error('Measurement hardware unavailable (HTTP '+r.status+')');
     const d=await r.json();
+    if(!d.liftValid||!d.dragValid){
+      $('liftValue').textContent='--';
+      $('dragValue').textContent='--';
+      $('testState').textContent=d.liftError||d.dragError||'Calibration required';
+      return;
+    }
     setData(Number(d.lift),Number(d.drag),Number(d.speed));
   }catch(e){
     $('testState').textContent='Data unavailable';
