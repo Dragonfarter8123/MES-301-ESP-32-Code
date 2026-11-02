@@ -49,6 +49,8 @@
     select { padding: 9px; border: 1px solid var(--line); background: white; }
     .form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
     .form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
+    .value-preset { display: grid; grid-template-columns: minmax(0, .7fr) minmax(0, 1.3fr); gap: 8px; }
+    input[type=number] { width: 100%; padding: 9px; border: 1px solid var(--line); }
     .setpoint { margin-top: 16px; }
     .setpoint-value { font-weight: bold; }
     .notice { margin-top: 12px; padding: 10px; border: 1px solid var(--line); background: var(--wash); line-height: 1.5; }
@@ -62,7 +64,7 @@
     .footer { margin-top: 18px; color: var(--muted); font-size: 11px; }
     @media (max-width: 700px) {
       .header-inner { align-items: flex-start; flex-direction: column; }
-      .grid, .form-grid { grid-template-columns: 1fr; }
+      .grid, .form-grid, .value-preset { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -138,10 +140,10 @@
               <div class="raw">ADC: <span id="dragRaw">—</span> counts · Voltage: <span id="dragVolts">—</span> V</div>
             </div>
           </div>
-          <h3>Raw ADC History</h3>
-          <div class="muted">Vertical axis: filtered ADC counts · Horizontal axis: sample sequence</div>
-          <div class="chart-wrap"><canvas id="chart" aria-label="Raw lift and drag ADC counts over time"></canvas></div>
-          <div class="legend"><span>Lift raw counts</span><span class="drag">Drag raw counts</span></div>
+          <h3>Output Voltage History</h3>
+          <div class="muted">Vertical axis: filtered voltage (mV) · Horizontal axis: sample sequence</div>
+          <div class="chart-wrap"><canvas id="chart" aria-label="Lift and drag output voltage in millivolts over time"></canvas></div>
+          <div class="legend"><span>Lift voltage</span><span class="drag">Drag voltage</span></div>
           <div class="footer">Samples collected: <span id="sampleCount">0</span></div>
           <div class="actions"><button onclick="exportCSV()">Download CSV</button></div>
         </div>
@@ -155,7 +157,7 @@
           <div class="form-grid">
             <div>
               <label for="team">Team</label>
-              <select id="team"><option>Team 1</option><option>Team 2</option></select>
+              <select id="team"><option>Team 1</option><option>Team 2</option><option>Team 3</option><option>Team 4</option><option>Team 5</option></select>
             </div>
             <div>
               <label for="object">Test object</label>
@@ -173,11 +175,30 @@
           <div class="form-grid two">
             <div>
               <label for="duration">Test duration</label>
-              <select id="duration"><option value="10">10 seconds</option><option value="20">20 seconds</option><option value="30" selected>30 seconds</option><option value="60">60 seconds</option></select>
+              <div class="value-preset">
+                <input id="duration" type="number" min="1" max="60" step="1" value="30" required aria-label="Test duration in seconds">
+                <select id="durationPreset" aria-label="Test duration presets">
+                  <option value="">Custom value</option>
+                  <option value="10">10 seconds</option>
+                  <option value="20">20 seconds</option>
+                  <option value="30" selected>30 seconds</option>
+                  <option value="60">60 seconds</option>
+                </select>
+              </div>
+              <div class="muted">Enter 1–60 seconds or choose a preset.</div>
             </div>
             <div>
               <label for="sampleRate">Logging sample rate</label>
-              <select id="sampleRate"><option value="10">10 Hz</option><option value="20" selected>20 Hz</option><option value="50">50 Hz</option></select>
+              <div class="value-preset">
+                <input id="sampleRate" type="number" min="1" max="50" step="1" value="20" required aria-label="Logging sample rate in hertz">
+                <select id="sampleRatePreset" aria-label="Logging sample rate presets">
+                  <option value="">Custom value</option>
+                  <option value="10">10 Hz</option>
+                  <option value="20" selected>20 Hz</option>
+                  <option value="50">50 Hz</option>
+                </select>
+              </div>
+              <div class="muted">Enter 1–50 Hz or choose a preset.</div>
             </div>
           </div>
           <div class="notice">The setpoint is not measured wind speed and does not control the fan. Settings apply when a test starts. Sensor readings are recorded only while the test is active.</div>
@@ -267,6 +288,9 @@
     }
 
     async function startTest() {
+      if (!$('duration').reportValidity() || !$('sampleRate').reportValidity()) {
+        return;
+      }
       const body = {
         team: $('team').value,
         object: $('object').value,
@@ -334,7 +358,7 @@
         $('overviewDrag').textContent = displayForce(data.drag);
         if (data.sampleSequence !== lastSequence) {
           lastSequence = data.sampleSequence;
-          samples.push({ lift: Number(data.liftRaw), drag: Number(data.dragRaw) });
+          samples.push({ lift: Number(data.liftVolts) * 1000, drag: Number(data.dragVolts) * 1000 });
           if (samples.length > 120) samples.shift();
           $('sampleCount').textContent = String(samples.length);
           drawChart();
@@ -425,7 +449,7 @@
       context.textAlign = 'right';
       for (let i = 0; i <= 4; i++) {
         const value = maximum - (maximum - minimum) * i / 4;
-        context.fillText(value.toFixed(0), pad.left - 6, pad.top + plotHeight * i / 4 + 4);
+        context.fillText(value.toFixed(2), pad.left - 6, pad.top + plotHeight * i / 4 + 4);
       }
       [['lift', '#111'], ['drag', '#888']].forEach(([key, color]) => {
         context.strokeStyle = color;
@@ -437,10 +461,32 @@
         });
         context.stroke();
       });
+      context.save();
+      context.translate(12, pad.top + plotHeight / 2);
+      context.rotate(-Math.PI / 2);
+      context.textAlign = 'center';
+      context.fillText('Voltage (mV)', 0, 0);
+      context.restore();
       context.textAlign = 'center';
       context.fillText('Sample sequence', pad.left + plotWidth / 2, height - 5);
     }
 
+    function connectPreset(inputId, presetId) {
+      const input = $(inputId);
+      const preset = $(presetId);
+      preset.addEventListener('change', () => {
+        if (preset.value) input.value = preset.value;
+        else input.focus();
+      });
+      input.addEventListener('input', () => {
+        preset.value = Array.from(preset.options).some(option => option.value === input.value)
+          ? input.value
+          : '';
+      });
+    }
+
+    connectPreset('duration', 'durationPreset');
+    connectPreset('sampleRate', 'sampleRatePreset');
     $('speed').addEventListener('input', event => { $('speedValue').textContent = Number(event.target.value).toFixed(1); });
     window.addEventListener('resize', drawChart);
     refreshStatus();

@@ -62,8 +62,10 @@ Upload the filesystem after changing `data/index.html`. The serial monitor
 runs at 115200 baud. With Wi-Fi credentials configured, open the printed ESP32
 IP address in a browser. Use **Start Test** and **Stop Test** from the shared
 header on any dashboard page. Test settings are applied when the test starts;
-duration is in seconds and the selected sample rate controls data logging.
-CSV contains only samples collected during a test.
+choose a team (1–5), enter a duration from 1–60 seconds and a logging rate
+from 1–50 Hz, or select one of the provided presets. The measurements graph
+shows filtered output voltage in millivolts. CSV contains only samples
+collected during a test.
 
 API: `GET /`, `GET /api/status`, `GET /api/data`, `POST /api/start`,
 `POST /api/stop`, `POST /api/calibration`, and `GET /api/export.csv`.

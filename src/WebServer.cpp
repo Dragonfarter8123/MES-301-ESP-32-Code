@@ -82,13 +82,15 @@ bool validStartSettings(JsonDocument &document, TestSettings &result) {
   const char *airfoil = document["object"] | "";
   const char *units = document["units"] | "N";
   const float setpoint = document["speed"] | 25.0f;
-  const uint32_t duration = document["duration"] | 0;
-  const uint16_t sampleRate = document["sampleRate"] | 0;
+  const float durationInput = document["duration"] | 0.0f;
+  const float sampleRateInput = document["sampleRate"] | 0.0f;
 
   if (!isfinite(setpoint) || setpoint < 20.0f || setpoint > 40.0f) {
     return false;
   }
-  if (strcmp(team, "Team 1") != 0 && strcmp(team, "Team 2") != 0) {
+  if (strcmp(team, "Team 1") != 0 && strcmp(team, "Team 2") != 0 &&
+      strcmp(team, "Team 3") != 0 && strcmp(team, "Team 4") != 0 &&
+      strcmp(team, "Team 5") != 0) {
     return false;
   }
   if (strcmp(airfoil, "NACA 4424") != 0 &&
@@ -99,16 +101,22 @@ bool validStartSettings(JsonDocument &document, TestSettings &result) {
       strcmp(units, "g") != 0) {
     return false;
   }
-  if (duration != 10 && duration != 20 && duration != 30 && duration != 60) {
+  if (!isfinite(durationInput) || durationInput < 1.0f ||
+      durationInput > Config::MaxTestDurationSeconds ||
+      floorf(durationInput) != durationInput) {
     return false;
   }
-  if (sampleRate != 10 && sampleRate != 20 && sampleRate != 50) {
+  const float maxSampleRateHz =
+      1000.0f / Config::InputSamplingIntervalMs;
+  if (!isfinite(sampleRateInput) || sampleRateInput < 1.0f ||
+      sampleRateInput > maxSampleRateHz ||
+      floorf(sampleRateInput) != sampleRateInput) {
     return false;
   }
 
   result.setpointMph = setpoint;
-  result.durationSeconds = duration;
-  result.sampleRateHz = sampleRate;
+  result.durationSeconds = static_cast<uint32_t>(durationInput);
+  result.sampleRateHz = static_cast<uint16_t>(sampleRateInput);
   result.team = team;
   result.airfoil = airfoil;
   result.units = units;
