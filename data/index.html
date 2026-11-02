@@ -1,542 +1,451 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Wind Test Station | Lift & Drag</title>
-<style>
-:root{
-  --navy:#173a67;
-  --navy2:#244d7d;
-  --blue:#2f6ee5;
-  --light:#eef4fa;
-  --card:#ffffff;
-  --border:#d5e0eb;
-  --text:#183047;
-  --muted:#6d7d8e;
-  --green:#2e9b62;
-  --red:#d9534f;
-  --yellow:#d99a21;
-  --shadow:0 2px 8px rgba(20,48,75,.08);
-}
-*{box-sizing:border-box}
-body{
-  margin:0;
-  font-family:Arial,Helvetica,sans-serif;
-  background:#f5f8fb;
-  color:var(--text);
-}
-.topbar{
-  background:var(--navy);
-  color:white;
-  padding:15px 22px;
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  border-bottom:4px solid #2e638f;
-}
-.brand{font-size:22px;font-weight:700;letter-spacing:.2px}
-.subtitle{font-size:12px;opacity:.8;margin-top:3px}
-.status-pill{
-  display:flex;align-items:center;gap:8px;
-  background:rgba(255,255,255,.12);
-  border:1px solid rgba(255,255,255,.22);
-  border-radius:20px;padding:7px 12px;font-size:12px
-}
-.dot{width:9px;height:9px;border-radius:50%;background:#48c982}
-.container{max-width:1180px;margin:20px auto;padding:0 16px}
-.grid{display:grid;grid-template-columns:1.35fr .85fr;gap:18px}
-.card{
-  background:var(--card);
-  border:1px solid var(--border);
-  border-radius:8px;
-  box-shadow:var(--shadow);
-}
-.card-header{
-  padding:13px 16px;
-  border-bottom:1px solid var(--border);
-  font-weight:700;
-  color:var(--navy);
-  display:flex;justify-content:space-between;align-items:center
-}
-.card-body{padding:16px}
-label{font-size:12px;font-weight:700;color:#506477;display:block;margin-bottom:6px}
-input,select{
-  width:100%;padding:10px 11px;border:1px solid #cbd7e3;
-  border-radius:5px;background:white;color:var(--text);font-size:14px
-}
-input:focus,select:focus{outline:2px solid #bdd2ee;border-color:var(--blue)}
-.form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
-.form-grid.two{grid-template-columns:1fr 1fr}
-.range-row{display:flex;gap:10px;align-items:center}
-input[type=range]{padding:0;accent-color:var(--blue)}
-.range-value{min-width:58px;text-align:right;font-weight:700;color:var(--navy)}
-.actions{display:flex;gap:9px;margin-top:15px;flex-wrap:wrap}
-button{
-  border:0;border-radius:5px;padding:10px 16px;font-size:13px;font-weight:700;
-  cursor:pointer;transition:.15s transform,.15s opacity
-}
-button:active{transform:scale(.98)}
-.primary{background:var(--blue);color:white}
-.secondary{background:#e8eef5;color:var(--navy)}
-.success{background:var(--green);color:white}
-.danger{background:var(--red);color:white}
-.warning{background:var(--yellow);color:white}
-button:disabled{opacity:.5;cursor:not-allowed}
-.status-box{
-  background:#f7fafc;border:1px solid var(--border);border-radius:6px;
-  padding:12px;margin-bottom:12px
-}
-.status-row{display:flex;justify-content:space-between;padding:5px 0;font-size:13px}
-.status-row span:first-child{color:var(--muted)}
-.status-row span:last-child{font-weight:700}
-.measurements{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.measure{
-  border:1px solid var(--border);border-radius:7px;padding:15px;
-  background:linear-gradient(#fff,#f8fbfe)
-}
-.measure .name{font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px}
-.measure .value{font-size:31px;font-weight:700;color:var(--navy);margin:6px 0 2px}
-.measure .unit{font-size:12px;color:var(--muted)}
-.measure.lift{border-left:4px solid var(--blue)}
-.measure.drag{border-left:4px solid #5f7ea1}
-.chart-wrap{height:285px;position:relative}
-canvas{width:100%;height:100%;display:block}
-.legend{display:flex;gap:18px;font-size:11px;color:var(--muted);margin-top:7px}
-.legend span{display:flex;align-items:center;gap:5px}
-.swatch{width:18px;height:3px;border-radius:2px;background:var(--blue)}
-.swatch.drag{background:#5f7ea1}
-.notice{
-  padding:10px 12px;border-radius:5px;background:#edf5ff;
-  border:1px solid #c9ddf4;color:#335879;font-size:12px;line-height:1.45;margin-top:12px
-}
-.footer{
-  text-align:center;color:#8190a0;font-size:11px;margin:18px 0 28px
-}
-.section-title{font-size:13px;font-weight:700;color:var(--navy);margin:17px 0 10px}
-.big-speed{
-  display:flex;align-items:baseline;gap:7px;margin-bottom:13px
-}
-.big-speed strong{font-size:36px;color:var(--navy)}
-.big-speed span{font-size:13px;color:var(--muted)}
-.cal-badge{
-  font-size:10px;background:#e9f6ef;color:#27744b;border:1px solid #c4e5d2;
-  padding:4px 7px;border-radius:12px
-}
-.small{font-size:11px;color:var(--muted)}
-table{width:100%;border-collapse:collapse;font-size:11px}
-th,td{padding:7px;border-bottom:1px solid var(--border);text-align:left}
-th{color:var(--navy);background:#eef4fa}
-@media(max-width:850px){
-  .grid{grid-template-columns:1fr}
-  .form-grid{grid-template-columns:1fr 1fr}
-}
-@media(max-width:520px){
-  .topbar{padding:12px 14px}.brand{font-size:18px}
-  .container{padding:0 10px;margin-top:12px}
-  .form-grid,.form-grid.two{grid-template-columns:1fr}
-  .measurements{grid-template-columns:1fr 1fr}
-  .measure .value{font-size:25px}
-}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wind Test Station | MES 301</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #111;
+      --muted: #666;
+      --line: #c9c9c9;
+      --paper: #fff;
+      --wash: #f3f3f3;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--wash); color: var(--ink); font: 14px Arial, sans-serif; }
+    header { background: var(--ink); color: var(--paper); padding: 14px 20px; }
+    .header-inner, main { max-width: 1100px; margin: auto; }
+    .header-inner { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    h1 { margin: 0; font-size: 21px; }
+    .subtitle { color: #ccc; font-size: 12px; margin-top: 4px; }
+    .header-actions, .nav, .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    main { padding: 18px 14px 28px; }
+    .nav { margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+    button, select, input { font: inherit; }
+    button { border: 1px solid var(--ink); background: var(--paper); color: var(--ink); border-radius: 3px; padding: 9px 13px; cursor: pointer; }
+    button:hover:not(:disabled), .nav button.active { background: var(--ink); color: var(--paper); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .header-actions button { border-color: var(--paper); }
+    .header-actions .stop { background: #fff; color: #111; }
+    .nav button { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+    .page { display: none; }
+    .page.active { display: block; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .card { background: var(--paper); border: 1px solid var(--line); border-radius: 4px; }
+    .card h2 { font-size: 15px; margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    .body { padding: 14px; }
+    .rows { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+    .rows span:nth-child(odd), .muted { color: var(--muted); }
+    .value { font-weight: bold; text-align: right; }
+    .measurements { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .measure { border: 1px solid var(--line); padding: 12px; }
+    .measure h3 { margin: 0 0 9px; font-size: 12px; text-transform: uppercase; }
+    .force { font-size: 25px; font-weight: bold; }
+    .raw { color: var(--muted); font-size: 12px; margin-top: 6px; }
+    label { display: block; font-weight: bold; font-size: 12px; margin-bottom: 6px; }
+    select, input[type=range] { width: 100%; }
+    select { padding: 9px; border: 1px solid var(--line); background: white; }
+    .form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
+    .setpoint { margin-top: 16px; }
+    .setpoint-value { font-weight: bold; }
+    .notice { margin-top: 12px; padding: 10px; border: 1px solid var(--line); background: var(--wash); line-height: 1.5; }
+    .chart-wrap { height: 300px; margin-top: 8px; }
+    canvas { width: 100%; height: 100%; display: block; }
+    .legend { display: flex; gap: 16px; color: var(--muted); font-size: 12px; }
+    .legend span::before { content: ""; display: inline-block; width: 17px; height: 2px; margin: 0 5px 3px 0; background: #111; }
+    .legend .drag::before { background: #888; }
+    .message { min-height: 20px; margin-top: 10px; color: var(--muted); }
+    .online { font-weight: bold; white-space: nowrap; }
+    .footer { margin-top: 18px; color: var(--muted); font-size: 11px; }
+    @media (max-width: 700px) {
+      .header-inner { align-items: flex-start; flex-direction: column; }
+      .grid, .form-grid { grid-template-columns: 1fr; }
+    }
+  </style>
 </head>
 <body>
-<header class="topbar">
-  <div>
-    <div class="brand">Wind Test Station</div>
-    <div class="subtitle">MES 301 • Lift & Drag Measurement System</div>
-  </div>
-  <div class="status-pill"><span class="dot" id="statusDot"></span><span id="connectionText">ESP32 Connected</span></div>
-</header>
+  <header>
+    <div class="header-inner">
+      <div>
+        <h1>Wind Test Station</h1>
+        <div class="subtitle">MES 301 · Lift &amp; Drag Measurement System</div>
+      </div>
+      <div class="header-actions">
+        <span class="online" id="connectionText">Connecting…</span>
+        <button id="startBtn" onclick="startTest()">Start Test</button>
+        <button class="stop" id="stopBtn" onclick="stopTest()" disabled>Stop Test</button>
+      </div>
+    </div>
+  </header>
 
-<main class="container">
-  <div class="grid">
-    <section>
-      <div class="card">
-        <div class="card-header">
-          <span>Test Configuration</span>
-          <span class="cal-badge" id="calStatus">Calibration Loaded</span>
+  <main>
+    <nav class="nav" aria-label="Dashboard pages">
+      <button class="active" data-page="overview" onclick="showPage('overview')">Overview</button>
+      <button data-page="measurements" onclick="showPage('measurements')">Measurements</button>
+      <button data-page="setup" onclick="showPage('setup')">Test Setup</button>
+      <button data-page="calibration" onclick="showPage('calibration')">Calibration</button>
+    </nav>
+
+    <section class="page active" id="overview">
+      <div class="grid">
+        <div class="card">
+          <h2>Station Status</h2>
+          <div class="body rows">
+            <span>ESP32</span><span class="value" id="espStatus">Unknown</span>
+            <span>ADS1115</span><span class="value" id="adcStatus">Unknown</span>
+            <span>Test</span><span class="value" id="testState">No active test</span>
+            <span>Actual wind speed</span><span class="value">Unknown</span>
+            <span>Wind-speed setpoint</span><span class="value"><span id="overviewSetpoint">—</span> mph</span>
+            <span>Calibration</span><span class="value" id="overviewCalibration">Unknown</span>
+          </div>
         </div>
-        <div class="card-body">
-          <div class="form-grid">
-            <div>
-              <label for="team">Team / Calibration</label>
-              <select id="team">
-                <option>Team Alpha</option>
-                <option>Team Beta</option>
-                <option>Team 3</option>
-              </select>
-            </div>
-            <div>
-              <label for="object">Test Object</label>
-              <select id="object">
-                <option>NACA 4424</option>
-                <option>NACA 6412</option>
-              </select>
-            </div>
-            <div>
-              <label for="units">Force Units</label>
-              <select id="units">
-                <option value="N">Newton (N)</option>
-                <option value="lbf">Pounds-force (lbf)</option>
-                <option value="g">Grams (g)</option>
-              </select>
-            </div>
+        <div class="card">
+          <h2>Current Test</h2>
+          <div class="body rows">
+            <span>Team</span><span class="value" id="overviewTeam">—</span>
+            <span>Test object</span><span class="value" id="overviewObject">—</span>
+            <span>Lift</span><span class="value" id="overviewLift">—</span>
+            <span>Drag</span><span class="value" id="overviewDrag">—</span>
           </div>
-
-          <div class="section-title">Wind Speed Setpoint</div>
-          <div class="range-row">
-            <input id="speed" type="range" min="20" max="40" value="25" step="0.5">
-            <div class="range-value"><span id="speedValue">25.0</span> mph</div>
-          </div>
-
-          <div class="form-grid two" style="margin-top:13px">
-            <div>
-              <label for="duration">Measurement Duration</label>
-              <select id="duration">
-                <option value="10">10 seconds</option>
-                <option value="20">20 seconds</option>
-                <option value="30" selected>30 seconds</option>
-                <option value="60">60 seconds</option>
-              </select>
-            </div>
-            <div>
-              <label for="sampleRate">Sampling</label>
-              <select id="sampleRate">
-                <option>10 Hz</option>
-                <option selected>20 Hz</option>
-                <option>50 Hz</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="actions">
-            <button class="primary" id="startBtn" onclick="startTest()">Start Test</button>
-            <button class="danger" id="stopBtn" onclick="stopTest()" disabled>Stop</button>
-            <button class="secondary" onclick="zeroLoadCells()">Zero Load Cells</button>
-          </div>
-          <div class="notice">
-            Operating range: <b>20–40 mph</b>. The dashboard displays simultaneous lift and drag measurements and can log force-versus-air-speed data for CSV export.
+          <div class="body actions">
+            <button onclick="showPage('setup')">Test Setup</button>
+            <button onclick="showPage('measurements')">View Measurements</button>
+            <button onclick="exportCSV()">Download CSV</button>
           </div>
         </div>
       </div>
+      <div class="notice">Force measurements require valid load-cell calibration. Actual wind speed is unknown because no verified airspeed sensor is configured. Fan output is disabled.</div>
+    </section>
 
-      <div class="card" style="margin-top:18px">
-        <div class="card-header">
-          <span>Real-Time Measurements</span>
-          <span class="small" id="testState">Ready</span>
-        </div>
-        <div class="card-body">
+    <section class="page" id="measurements">
+      <div class="card">
+        <h2>Live Measurements <span class="muted" id="measurementState">No active test</span></h2>
+        <div class="body">
           <div class="measurements">
-            <div class="measure lift">
-              <div class="name">Lift</div>
-              <div class="value" id="liftValue">0.00</div>
-              <div class="unit" id="liftUnit">N</div>
+            <div class="measure">
+              <h3>Lift</h3>
+              <div class="force" id="liftValue">—</div>
+              <div id="liftUnit">Force unavailable</div>
+              <div class="raw">ADC: <span id="liftRaw">—</span> counts · Voltage: <span id="liftVolts">—</span> V</div>
             </div>
-            <div class="measure drag">
-              <div class="name">Drag</div>
-              <div class="value" id="dragValue">0.00</div>
-              <div class="unit" id="dragUnit">N</div>
+            <div class="measure">
+              <h3>Drag</h3>
+              <div class="force" id="dragValue">—</div>
+              <div id="dragUnit">Force unavailable</div>
+              <div class="raw">ADC: <span id="dragRaw">—</span> counts · Voltage: <span id="dragVolts">—</span> V</div>
             </div>
           </div>
-
-          <div class="section-title">Measurement History</div>
-          <div class="chart-wrap"><canvas id="chart"></canvas></div>
-          <div class="legend">
-            <span><i class="swatch"></i> Lift</span>
-            <span><i class="swatch drag"></i> Drag</span>
-          </div>
+          <h3>Raw ADC History</h3>
+          <div class="muted">Vertical axis: filtered ADC counts · Horizontal axis: sample sequence</div>
+          <div class="chart-wrap"><canvas id="chart" aria-label="Raw lift and drag ADC counts over time"></canvas></div>
+          <div class="legend"><span>Lift raw counts</span><span class="drag">Drag raw counts</span></div>
+          <div class="footer">Samples collected: <span id="sampleCount">0</span></div>
+          <div class="actions"><button onclick="exportCSV()">Download CSV</button></div>
         </div>
       </div>
     </section>
 
-    <aside>
+    <section class="page" id="setup">
       <div class="card">
-        <div class="card-header"><span>Station Status</span></div>
-        <div class="card-body">
-          <div class="status-box">
-            <div class="status-row"><span>ESP32</span><span id="espStatus">Connected</span></div>
-            <div class="status-row"><span>Wind Tunnel</span><span id="tunnelStatus">Ready</span></div>
-            <div class="status-row"><span>Current Speed</span><span><span id="currentSpeed">0.0</span> mph</span></div>
-            <div class="status-row"><span>ADC</span><span id="adcStatus">Checking...</span></div>
-            <div class="status-row"><span>Channels</span><span>Lift + Drag</span></div>
-            <div class="status-row"><span>Calibration</span><span id="sideCal">Loaded</span></div>
+        <h2>Test Setup</h2>
+        <div class="body">
+          <div class="form-grid">
+            <div>
+              <label for="team">Team</label>
+              <select id="team"><option>Team 1</option><option>Team 2</option></select>
+            </div>
+            <div>
+              <label for="object">Test object</label>
+              <select id="object"><option>NACA 4424</option><option>NACA 6412</option></select>
+            </div>
+            <div>
+              <label for="units">Force display units</label>
+              <select id="units"><option value="N">Newtons (N)</option><option value="lbf">Pounds-force (lbf)</option><option value="g">Grams-force (g)</option></select>
+            </div>
           </div>
-
-          <button class="primary" style="width:100%" onclick="openCalibration()">Calibration Setup</button>
-          <button class="secondary" style="width:100%;margin-top:8px" onclick="exportCSV()">Download CSV</button>
-
-          <div class="section-title">Quick Data</div>
-          <table>
-            <tr><th>Parameter</th><th>Value</th></tr>
-            <tr><td>Setpoint</td><td><span id="tableSpeed">25.0</span> mph</td></tr>
-            <tr><td>Object</td><td id="tableObject">NACA 4424</td></tr>
-            <tr><td>Units</td><td id="tableUnits">N</td></tr>
-            <tr><td>Samples</td><td id="sampleCount">0</td></tr>
-          </table>
-
-          <div class="notice">
-            <b>System concept:</b><br>
-            ESP-10 Load Cells → Amplifier → ADS1115 → ESP-32 → Calibration → User Interface
+          <div class="setpoint">
+            <label for="speed">Wind-speed setpoint: <span class="setpoint-value"><span id="speedValue">25.0</span> mph</span></label>
+            <input id="speed" type="range" min="20" max="40" value="25" step="0.5">
           </div>
+          <div class="form-grid two">
+            <div>
+              <label for="duration">Test duration</label>
+              <select id="duration"><option value="10">10 seconds</option><option value="20">20 seconds</option><option value="30" selected>30 seconds</option><option value="60">60 seconds</option></select>
+            </div>
+            <div>
+              <label for="sampleRate">Logging sample rate</label>
+              <select id="sampleRate"><option value="10">10 Hz</option><option value="20" selected>20 Hz</option><option value="50">50 Hz</option></select>
+            </div>
+          </div>
+          <div class="notice">The setpoint is not measured wind speed and does not control the fan. Settings apply when a test starts. Sensor readings are recorded only while the test is active.</div>
+          <div class="message" id="setupMessage" role="status"></div>
         </div>
       </div>
+    </section>
 
-      <div class="card" style="margin-top:18px">
-        <div class="card-header"><span>Calibration</span><span class="small">Zero + curve correction</span></div>
-        <div class="card-body">
-          <div class="status-row"><span>Zero balance</span><span id="zeroStatus">Set</span></div>
-          <div class="status-row"><span>Non-linearity</span><span>Polynomial</span></div>
-          <div class="status-row"><span>Hysteresis</span><span>Supported</span></div>
-          <div class="status-row"><span>Target accuracy</span><span>±5%</span></div>
-          <div class="actions">
-            <button class="secondary" onclick="runCalibration()">Run Calibration</button>
+    <section class="page" id="calibration">
+      <div class="card">
+        <h2>Calibration</h2>
+        <div class="body">
+          <div class="rows">
+            <span>Calibration status</span><span class="value" id="calibrationStatus">Unknown</span>
+            <span>Force output</span><span class="value" id="forceStatus">Unavailable</span>
           </div>
+          <div class="notice">Calibration values are not provided. Apply known loads to each load cell, determine tare counts and Newtons per count, then enter the verified values in <code>include/Config.h</code>. This dashboard cannot create or assume calibration values.</div>
+          <div class="actions"><button onclick="checkCalibration()">Check Calibration Status</button></div>
+          <div class="message" id="calibrationMessage" role="status"></div>
         </div>
       </div>
-    </aside>
-  </div>
+    </section>
+  </main>
 
-  <div class="footer">MES 301 • Electrical Engineering Systems • Lift & Drag Measurement System</div>
-</main>
+  <script>
+    const API = {
+      status: '/api/status',
+      data: '/api/data',
+      start: '/api/start',
+      stop: '/api/stop',
+      calibration: '/api/calibration',
+      csv: '/api/export.csv'
+    };
+    const $ = id => document.getElementById(id);
+    let running = false;
+    let calibrationLoaded = false;
+    let samples = [];
+    let lastSequence = null;
+    let dataTimer = null;
+    let readingData = false;
 
-<script>
-/*
-  ESP32 API hooks
-  ----------------
-  Expected optional endpoints:
-    GET  /api/status
-    GET  /api/data
-    POST /api/start       JSON: {speed, object, units, duration, sampleRate}
-    POST /api/stop
-    POST /api/zero
-    POST /api/calibration
-    GET  /api/export.csv
-
-*/
-
-const API = {
-  status:'/api/status',
-  data:'/api/data',
-  start:'/api/start',
-  stop:'/api/stop',
-  zero:'/api/zero',
-  calibration:'/api/calibration',
-  csv:'/api/export.csv'
-};
-
-let running = false;
-let samples = [];
-let timer = null;
-
-const $ = id => document.getElementById(id);
-
-$('speed').addEventListener('input', e => {
-  $('speedValue').textContent = Number(e.target.value).toFixed(1);
-  $('tableSpeed').textContent = Number(e.target.value).toFixed(1);
-});
-$('object').addEventListener('change', e => $('tableObject').textContent = e.target.value);
-$('units').addEventListener('change', e => {
-  $('tableUnits').textContent = e.target.value;
-  $('liftUnit').textContent = e.target.value;
-  $('dragUnit').textContent = e.target.value;
-  updateDisplay(lastLift, lastDrag);
-});
-
-let lastLift=0, lastDrag=0;
-
-function toUnits(n){
-  const u=$('units').value;
-  if(u==='lbf') return n*0.224809;
-  if(u==='g') return n*101.9716;
-  return n;
-}
-function fmt(n){
-  const u=$('units').value;
-  if(u==='g') return n.toFixed(1);
-  return n.toFixed(3);
-}
-function updateDisplay(lift,drag){
-  lastLift=lift; lastDrag=drag;
-  $('liftValue').textContent=fmt(toUnits(lift));
-  $('dragValue').textContent=fmt(toUnits(drag));
-  $('liftUnit').textContent=$('units').value;
-  $('dragUnit').textContent=$('units').value;
-}
-
-async function post(url, body){
-  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  const result=await r.json().catch(()=>({}));
-  if(!r.ok) throw new Error(result.error||('HTTP '+r.status));
-  return result;
-}
-
-async function startTest(){
-  if(running)return;
-  const body={
-    speed:Number($('speed').value),
-    object:$('object').value,
-    units:$('units').value,
-    team:$('team').value,
-    duration:Number($('duration').value),
-    sampleRate:$('sampleRate').value
-  };
-  try{
-    await post(API.start,body);
-    running=true; samples=[];
-    $('startBtn').disabled=true; $('stopBtn').disabled=false;
-    $('testState').textContent='Testing';
-    $('tunnelStatus').textContent='Running';
-    $('sampleCount').textContent='0';
-    clearInterval(timer);
-    timer=setInterval(readData,250);
-    await readData();
-  }catch(e){
-    alert('Could not start test: '+e.message);
-  }
-}
-async function stopTest(){
-  if(!running)return;
-  try{
-    await post(API.stop,{});
-    running=false; clearInterval(timer); timer=null;
-    $('startBtn').disabled=false; $('stopBtn').disabled=true;
-    $('testState').textContent='Ready';
-    $('tunnelStatus').textContent='Ready';
-    $('currentSpeed').textContent='0.0';
-  }catch(e){
-    alert('Could not stop test: '+e.message);
-  }
-}
-async function zeroLoadCells(){
-  try{
-    await post(API.zero,{});
-    $('zeroStatus').textContent='Set';
-    updateDisplay(0,0);
-    samples=[];
-    $('sampleCount').textContent='0';
-    drawChart();
-  }catch(e){
-    alert('Could not zero load cells: '+e.message);
-  }
-}
-async function openCalibration(){
-  alert('Calibration setup: apply known loads, collect load-cell outputs, calculate zero balance, fit the calibration curve, then save the result to the ESP32.');
-}
-async function runCalibration(){
-  try{
-    await post(API.calibration,{object:$('object').value,team:$('team').value});
-    $('calStatus').textContent='Calibration Loaded';
-    $('sideCal').textContent='Loaded';
-    alert('Calibration command sent to ESP32.');
-  }catch(e){
-    alert('Could not calibrate: '+e.message);
-  }
-}
-async function readData(){
-  try{
-    const r=await fetch(API.data,{cache:'no-store'});
-    if(!r.ok) throw new Error('Measurement hardware unavailable (HTTP '+r.status+')');
-    const d=await r.json();
-    setData(Number(d.lift),Number(d.drag),Number(d.speed));
-  }catch(e){
-    $('testState').textContent='Data unavailable';
-    $('connectionText').textContent='ESP32 connected · data unavailable';
-  }
-}
-function setData(lift,drag,speed){
-  updateDisplay(lift,drag);
-  $('currentSpeed').textContent=Number(speed).toFixed(1);
-  samples.push({time:new Date().toISOString(),speed,lift,drag});
-  if(samples.length>120)samples.shift();
-  $('sampleCount').textContent=samples.length;
-  drawChart();
-}
-function exportCSV(){
-  window.location.href=API.csv;
-}
-function drawChart(){
-  const c=$('chart'), ctx=c.getContext('2d');
-  const dpr=window.devicePixelRatio||1;
-  const rect=c.getBoundingClientRect();
-  c.width=rect.width*dpr; c.height=rect.height*dpr;
-  ctx.setTransform(dpr,0,0,dpr,0,0);
-  const w=rect.width,h=rect.height;
-  ctx.clearRect(0,0,w,h);
-
-  const pad={l:42,r:12,t:12,b:28};
-  const pw=w-pad.l-pad.r, ph=h-pad.t-pad.b;
-  ctx.strokeStyle='#dbe4ec'; ctx.lineWidth=1;
-  for(let i=0;i<=4;i++){
-    const y=pad.t+ph*i/4;
-    ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+pw,y);ctx.stroke();
-  }
-  for(let i=0;i<=5;i++){
-    const x=pad.l+pw*i/5;
-    ctx.beginPath();ctx.moveTo(x,pad.t);ctx.lineTo(x,pad.t+ph);ctx.stroke();
-  }
-
-  if(samples.length<2){
-    ctx.fillStyle='#8a99a8';ctx.font='12px Arial';
-    ctx.textAlign='center';ctx.fillText('Start a test to view real-time data',pad.l+pw/2,pad.t+ph/2);
-    return;
-  }
-  const max=Math.max(0.1,...samples.map(s=>Math.max(s.lift,s.drag)))*1.15;
-  const min=0;
-  const x=i=>pad.l+pw*(i/(samples.length-1));
-  const y=v=>pad.t+ph*(1-(v-min)/(max-min));
-
-  ctx.font='10px Arial';ctx.fillStyle='#718294';ctx.textAlign='right';
-  for(let i=0;i<=4;i++)ctx.fillText((max*(1-i/4)).toFixed(2),pad.l-6,pad.t+ph*i/4+3);
-
-  function line(key,dash){
-    ctx.strokeStyle=key==='lift'?'#2f6ee5':'#5f7ea1';
-    ctx.lineWidth=2;ctx.setLineDash(dash?[4,3]:[]);
-    ctx.beginPath();
-    samples.forEach((s,i)=>{const xx=x(i),yy=y(s[key]);i?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy)});
-    ctx.stroke();ctx.setLineDash([]);
-  }
-  line('lift',false); line('drag',true);
-
-  ctx.fillStyle='#718294';ctx.textAlign='center';
-  ctx.fillText('Samples / time',pad.l+pw/2,h-7);
-}
-window.addEventListener('resize',drawChart);
-
-async function checkStatus(){
-  try{
-    const r=await fetch(API.status,{cache:'no-store'});
-    if(r.ok){
-      const d=await r.json();
-      const hardwareReady=Boolean(d.adsAvailable);
-      $('connectionText').textContent=hardwareReady?'ESP32 Connected':'ESP32 Connected · ADS1115 missing';
-      $('espStatus').textContent='Connected';
-      $('adcStatus').textContent=hardwareReady?'ADS1115 • 16-bit':'Not found';
-      $('statusDot').style.background=hardwareReady?'#48c982':'#d99a21';
-      if(d.speed!==undefined)$('currentSpeed').textContent=Number(d.speed).toFixed(1);
-      if(d.tunnelStatus)$('tunnelStatus').textContent=d.tunnelStatus;
-      if(d.zeroed!==undefined)$('zeroStatus').textContent=d.zeroed?'Set':'Not set';
-      if(d.calibrationLoaded!==undefined){
-        $('calStatus').textContent=d.calibrationLoaded?'Calibration Loaded':'Not calibrated';
-        $('sideCal').textContent=d.calibrationLoaded?'Loaded':'Not loaded';
-      }
-      if(d.running!==undefined){
-        running=Boolean(d.running);
-        $('startBtn').disabled=running;
-        $('stopBtn').disabled=!running;
-        $('testState').textContent=running?'Testing':'Ready';
-      }
-      return;
+    function showPage(page) {
+      document.querySelectorAll('.page').forEach(section => section.classList.toggle('active', section.id === page));
+      document.querySelectorAll('.nav button').forEach(button => button.classList.toggle('active', button.dataset.page === page));
+      if (page === 'measurements') drawChart();
     }
-  }catch(e){}
-  $('connectionText').textContent='ESP32 unavailable';
-  $('espStatus').textContent='Disconnected';
-  $('adcStatus').textContent='Unknown';
-  $('statusDot').style.background='#d99a21';
-}
-checkStatus();
-setInterval(checkStatus,5000);
-drawChart();
-</script>
+
+    function clearMeasurements() {
+      samples = [];
+      lastSequence = null;
+      $('liftValue').textContent = '—';
+      $('dragValue').textContent = '—';
+      $('liftUnit').textContent = 'Force unavailable';
+      $('dragUnit').textContent = 'Force unavailable';
+      $('liftRaw').textContent = '—';
+      $('dragRaw').textContent = '—';
+      $('liftVolts').textContent = '—';
+      $('dragVolts').textContent = '—';
+      $('overviewLift').textContent = '—';
+      $('overviewDrag').textContent = '—';
+      $('sampleCount').textContent = '0';
+      $('measurementState').textContent = 'No active test';
+      drawChart();
+    }
+
+    function setRunning(next) {
+      if (running && !next) clearMeasurements();
+      running = next;
+      $('startBtn').disabled = running;
+      $('stopBtn').disabled = !running;
+      $('testState').textContent = running ? 'Running' : 'No active test';
+      $('measurementState').textContent = running ? 'Test active' : 'No active test';
+      if (running && dataTimer === null) {
+        dataTimer = setInterval(readData, 250);
+        readData();
+      } else if (!running && dataTimer !== null) {
+        clearInterval(dataTimer);
+        dataTimer = null;
+      }
+    }
+
+    async function requestJson(url, options) {
+      const response = await fetch(url, options);
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      return result;
+    }
+
+    async function startTest() {
+      const body = {
+        team: $('team').value,
+        object: $('object').value,
+        units: $('units').value,
+        speed: Number($('speed').value),
+        duration: Number($('duration').value),
+        sampleRate: Number($('sampleRate').value)
+      };
+      try {
+        await requestJson(API.start, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        clearMeasurements();
+        setRunning(true);
+        $('setupMessage').textContent = 'Test started.';
+      } catch (error) {
+        $('setupMessage').textContent = `Could not start test: ${error.message}`;
+      }
+    }
+
+    async function stopTest() {
+      try {
+        await requestJson(API.stop, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        setRunning(false);
+        $('setupMessage').textContent = 'Test stopped. Displayed measurements were cleared.';
+      } catch (error) {
+        $('setupMessage').textContent = `Could not stop test: ${error.message}`;
+      }
+    }
+
+    function displayForce(value) {
+      if (value === null || !Number.isFinite(Number(value))) return '—';
+      const unit = $('units').value;
+      const force = Number(value);
+      if (unit === 'lbf') return `${(force * 0.224809).toFixed(3)} lbf`;
+      if (unit === 'g') return `${(force * 101.9716).toFixed(1)} gf`;
+      return `${force.toFixed(3)} N`;
+    }
+
+    async function readData() {
+      if (readingData || !running) return;
+      readingData = true;
+      try {
+        const data = await requestJson(API.data, { cache: 'no-store' });
+        if (!data.running) {
+          setRunning(false);
+          return;
+        }
+        if (data.liftRaw === null || data.dragRaw === null) return;
+        $('liftRaw').textContent = Number(data.liftRaw).toFixed(1);
+        $('dragRaw').textContent = Number(data.dragRaw).toFixed(1);
+        $('liftVolts').textContent = Number(data.liftVolts).toFixed(6);
+        $('dragVolts').textContent = Number(data.dragVolts).toFixed(6);
+        $('liftValue').textContent = displayForce(data.lift);
+        $('dragValue').textContent = displayForce(data.drag);
+        $('liftUnit').textContent = data.lift === null ? 'Force unavailable · ADC counts shown' : 'Calibrated force';
+        $('dragUnit').textContent = data.drag === null ? 'Force unavailable · ADC counts shown' : 'Calibrated force';
+        $('overviewLift').textContent = displayForce(data.lift);
+        $('overviewDrag').textContent = displayForce(data.drag);
+        if (data.sampleSequence !== lastSequence) {
+          lastSequence = data.sampleSequence;
+          samples.push({ lift: Number(data.liftRaw), drag: Number(data.dragRaw) });
+          if (samples.length > 120) samples.shift();
+          $('sampleCount').textContent = String(samples.length);
+          drawChart();
+        }
+      } catch (error) {
+        $('measurementState').textContent = `Data unavailable: ${error.message}`;
+      } finally {
+        readingData = false;
+      }
+    }
+
+    async function refreshStatus() {
+      try {
+        const status = await requestJson(API.status, { cache: 'no-store' });
+        $('connectionText').textContent = status.wifiConnected ? 'ESP32 connected' : 'ESP32 · Wi-Fi disconnected';
+        $('espStatus').textContent = 'Connected';
+        $('adcStatus').textContent = status.adsAvailable ? 'Connected' : (status.adsError || 'Disconnected');
+        calibrationLoaded = Boolean(status.calibrationLoaded);
+        const calibrationText = calibrationLoaded ? 'Loaded' : 'Not calibrated';
+        $('calibrationStatus').textContent = calibrationText;
+        $('overviewCalibration').textContent = calibrationText;
+        $('forceStatus').textContent = calibrationLoaded ? 'Available' : 'Unavailable';
+        $('overviewSetpoint').textContent = Number(status.setpoint).toFixed(1);
+        $('overviewTeam').textContent = status.running ? status.team : '—';
+        $('overviewObject').textContent = status.running ? status.object : '—';
+        setRunning(Boolean(status.running));
+      } catch (error) {
+        $('connectionText').textContent = 'ESP32 unavailable';
+        $('espStatus').textContent = 'Disconnected';
+        $('adcStatus').textContent = 'Unknown';
+      }
+    }
+
+    async function checkCalibration() {
+      try {
+        const response = await fetch(API.calibration, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        const result = await response.json();
+        calibrationLoaded = Boolean(result.calibrationLoaded);
+        $('calibrationStatus').textContent = calibrationLoaded ? 'Loaded' : 'Not calibrated';
+        $('overviewCalibration').textContent = calibrationLoaded ? 'Loaded' : 'Not calibrated';
+        $('forceStatus').textContent = calibrationLoaded ? 'Available' : 'Unavailable';
+        $('calibrationMessage').textContent = result.error || (response.ok ? 'Calibration status updated.' : `HTTP ${response.status}`);
+      } catch (error) {
+        $('calibrationMessage').textContent = `Could not check calibration: ${error.message}`;
+      }
+    }
+
+    function exportCSV() { window.location.href = API.csv; }
+
+    function drawChart() {
+      const canvas = $('chart');
+      const context = canvas.getContext('2d');
+      const bounds = canvas.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = bounds.width * ratio;
+      canvas.height = bounds.height * ratio;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      const width = bounds.width;
+      const height = bounds.height;
+      context.clearRect(0, 0, width, height);
+      const pad = { left: 48, right: 12, top: 12, bottom: 28 };
+      const plotWidth = width - pad.left - pad.right;
+      const plotHeight = height - pad.top - pad.bottom;
+      context.strokeStyle = '#ddd';
+      context.fillStyle = '#555';
+      context.font = '11px Arial';
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.top + plotHeight * i / 4;
+        context.beginPath(); context.moveTo(pad.left, y); context.lineTo(width - pad.right, y); context.stroke();
+      }
+      if (!running || samples.length < 2) {
+        context.textAlign = 'center';
+        context.fillText('No active test', pad.left + plotWidth / 2, pad.top + plotHeight / 2);
+        return;
+      }
+      let minimum = Math.min(...samples.map(sample => Math.min(sample.lift, sample.drag)));
+      let maximum = Math.max(...samples.map(sample => Math.max(sample.lift, sample.drag)));
+      if (minimum === maximum) { minimum -= 1; maximum += 1; }
+      const margin = (maximum - minimum) * 0.1;
+      minimum -= margin; maximum += margin;
+      const x = index => pad.left + plotWidth * index / (samples.length - 1);
+      const y = value => pad.top + plotHeight * (1 - (value - minimum) / (maximum - minimum));
+      context.textAlign = 'right';
+      for (let i = 0; i <= 4; i++) {
+        const value = maximum - (maximum - minimum) * i / 4;
+        context.fillText(value.toFixed(0), pad.left - 6, pad.top + plotHeight * i / 4 + 4);
+      }
+      [['lift', '#111'], ['drag', '#888']].forEach(([key, color]) => {
+        context.strokeStyle = color;
+        context.lineWidth = 2;
+        context.beginPath();
+        samples.forEach((sample, index) => {
+          if (index === 0) context.moveTo(x(index), y(sample[key]));
+          else context.lineTo(x(index), y(sample[key]));
+        });
+        context.stroke();
+      });
+      context.textAlign = 'center';
+      context.fillText('Sample sequence', pad.left + plotWidth / 2, height - 5);
+    }
+
+    $('speed').addEventListener('input', event => { $('speedValue').textContent = Number(event.target.value).toFixed(1); });
+    window.addEventListener('resize', drawChart);
+    refreshStatus();
+    setInterval(refreshStatus, 2000);
+    drawChart();
+  </script>
 </body>
 </html>
