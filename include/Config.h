@@ -33,4 +33,10 @@ constexpr float DragNewtonsPerCount = 0.0f;
 
 constexpr uint32_t MaxTestDurationSeconds = 60;
 constexpr uint16_t MaxCsvSamples = 3000;
+
+constexpr float MinTunnelSpeedMph = 20.0f;
+constexpr float MaxTunnelSpeedMph = 40.0f;
+constexpr float TunnelSpeedStepMph = 0.5f;
+constexpr uint32_t TunnelStabilizationPeriodMs = 8200;
+constexpr bool TunnelPhysicalOutputEnabled = false;
 }  // namespace Config

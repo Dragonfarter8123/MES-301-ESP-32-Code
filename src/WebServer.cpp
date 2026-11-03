@@ -14,6 +14,7 @@
 #include "Calculations.h"
 #include "Config.h"
 #include "ESP10_Inputs.h"
+#include "WindTunnelControl.h"
 
 namespace {
 struct TestSettings {
@@ -77,6 +78,31 @@ void sendError(AsyncWebServerRequest *request, int status,
   sendJson(request, status, response);
 }
 
+void addTunnelStatus(JsonDocument &response) {
+  const WindTunnelControlStatus status = getWindTunnelControlStatus();
+  response["targetSpeedMph"] = status.targetSpeedMph;
+  if (status.calculationAvailable) {
+    response["estimatedFanRPM"] = status.estimatedFanRpm;
+    response["calculatedVoltage"] = status.calculatedVoltage;
+  } else {
+    response["estimatedFanRPM"] = nullptr;
+    response["calculatedVoltage"] = nullptr;
+  }
+  response["outputEnabled"] = status.outputEnabled;
+  response["dacConnected"] = status.dacConnected;
+  response["actualSpeedMph"] = nullptr;
+  response["running"] = status.running;
+  response["tunnelRunning"] = status.running;
+  response["stabilizationElapsedMs"] = status.stabilizationElapsedMs;
+  response["stabilizationPeriodMs"] = Config::TunnelStabilizationPeriodMs;
+  response["stabilizationTimerComplete"] =
+      status.stabilizationTimerComplete;
+  response["steadyStateVerified"] = status.steadyStateVerified;
+  response["controlMode"] = "simulation";
+  response["message"] =
+      "Simulation only; physical output is disabled and actual wind speed is unknown.";
+}
+
 bool validStartSettings(JsonDocument &document, TestSettings &result) {
   const char *team = document["team"] | "";
   const char *airfoil = document["object"] | "";
@@ -85,7 +111,10 @@ bool validStartSettings(JsonDocument &document, TestSettings &result) {
   const float durationInput = document["duration"] | 0.0f;
   const float sampleRateInput = document["sampleRate"] | 0.0f;
 
-  if (!isfinite(setpoint) || setpoint < 20.0f || setpoint > 40.0f) {
+  if (!isfinite(setpoint) || setpoint < Config::MinTunnelSpeedMph ||
+      setpoint > Config::MaxTunnelSpeedMph ||
+      fabsf(setpoint / Config::TunnelSpeedStepMph -
+            roundf(setpoint / Config::TunnelSpeedStepMph)) > 0.001f) {
     return false;
   }
   if (strcmp(team, "Team 1") != 0 && strcmp(team, "Team 2") != 0 &&
@@ -155,6 +184,16 @@ void handleStart(AsyncWebServerRequest *request, uint8_t *body, size_t length,
     return;
   }
 
+  const char *controlError = nullptr;
+  if (!setWindTunnelTargetSpeed(requested.setpointMph, &controlError) ||
+      !startWindTunnelControl(&controlError)) {
+    unlockState();
+    sendError(request, 400,
+              controlError != nullptr ? controlError
+                                      : "Wind tunnel control could not start.");
+    return;
+  }
+
   settings = requested;
   testSamples.clear();
   testRunning = true;
@@ -168,6 +207,7 @@ void handleStart(AsyncWebServerRequest *request, uint8_t *body, size_t length,
   response["running"] = true;
   response["durationSeconds"] = requested.durationSeconds;
   response["setpoint"] = requested.setpointMph;
+  addTunnelStatus(response);
   sendJson(request, 200, response);
 }
 
@@ -178,9 +218,69 @@ void handleStop(AsyncWebServerRequest *request) {
   }
   testRunning = false;
   unlockState();
+  stopWindTunnelControl();
 
   JsonDocument response;
   response["running"] = false;
+  addTunnelStatus(response);
+  sendJson(request, 200, response);
+}
+
+void handleTunnelSetSpeed(AsyncWebServerRequest *request, uint8_t *body,
+                          size_t length, size_t index, size_t total) {
+  if (index != 0 || length != total || total > 1024) {
+    sendError(request, 400, "Invalid or oversized request body");
+    return;
+  }
+
+  JsonDocument document;
+  if (deserializeJson(document, body, length)) {
+    sendError(request, 400, "Request body must be valid JSON");
+    return;
+  }
+
+  const float mph = document["targetSpeedMph"] | -1.0f;
+  const char *error = nullptr;
+  if (!setWindTunnelTargetSpeed(mph, &error)) {
+    sendError(request, 400, error != nullptr ? error : "Invalid target speed.");
+    return;
+  }
+
+  JsonDocument response;
+  addTunnelStatus(response);
+  sendJson(request, 200, response);
+}
+
+void handleTunnelStart(AsyncWebServerRequest *request) {
+  const char *error = nullptr;
+  if (!startWindTunnelControl(&error)) {
+    sendError(request, 409,
+              error != nullptr ? error : "Wind tunnel control could not start.");
+    return;
+  }
+
+  JsonDocument response;
+  addTunnelStatus(response);
+  sendJson(request, 200, response);
+}
+
+void handleTunnelStop(AsyncWebServerRequest *request) {
+  if (!lockState()) {
+    sendError(request, 503, "Test state is unavailable");
+    return;
+  }
+  testRunning = false;
+  unlockState();
+  stopWindTunnelControl();
+
+  JsonDocument response;
+  addTunnelStatus(response);
+  sendJson(request, 200, response);
+}
+
+void handleTunnelStatus(AsyncWebServerRequest *request) {
+  JsonDocument response;
+  addTunnelStatus(response);
   sendJson(request, 200, response);
 }
 
@@ -220,6 +320,8 @@ void handleStatus(AsyncWebServerRequest *request) {
   response["team"] = current.team;
   response["object"] = current.airfoil;
   response["units"] = current.units;
+  addTunnelStatus(response);
+  response["running"] = running;
   sendJson(request, 200, response);
 }
 
@@ -348,6 +450,11 @@ void configureRoutes() {
   server.on("/api/start", HTTP_POST, [](AsyncWebServerRequest *) {}, nullptr,
             handleStart);
   server.on("/api/stop", HTTP_POST, handleStop);
+  server.on("/api/tunnel/set-speed", HTTP_POST, [](AsyncWebServerRequest *) {},
+            nullptr, handleTunnelSetSpeed);
+  server.on("/api/tunnel/start", HTTP_POST, handleTunnelStart);
+  server.on("/api/tunnel/stop", HTTP_POST, handleTunnelStop);
+  server.on("/api/tunnel/status", HTTP_GET, handleTunnelStatus);
   server.on("/api/calibration", HTTP_POST, handleCalibration);
   server.on("/api/export.csv", HTTP_GET, handleExport);
 }
@@ -372,6 +479,7 @@ void initializeWebServer() {
 }
 
 void updateWebServer() {
+  updateWindTunnelControl();
   if (WiFi.status() == WL_CONNECTED && !wifiAddressPrinted) {
     Serial.print("Wi-Fi connected. Dashboard: http://");
     Serial.println(WiFi.localIP());
@@ -393,6 +501,9 @@ void updateWebServer() {
   if (testRunning &&
       millis() - testStartedAt >= settings.durationSeconds * 1000U) {
     testRunning = false;
+    unlockState();
+    stopWindTunnelControl();
+    return;
   }
 
   const uint32_t sampleInterval = 1000U / settings.sampleRateHz;
