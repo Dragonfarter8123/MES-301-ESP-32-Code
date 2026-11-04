@@ -13,13 +13,24 @@ struct WindTunnelControlStatus {
   bool running;
   bool stabilizationTimerComplete;
   bool steadyStateVerified;
+  bool commandAccepted;
+  bool outputVoltageVerified;
+  bool benchTestActive;
+  float commandedDacVoltage;
 };
 
 void initializeWindTunnelControl();
 void updateWindTunnelControl();
 bool setWindTunnelTargetSpeed(float mph, const char **error);
 bool startWindTunnelControl(const char **error);
-void stopWindTunnelControl();
+bool stopWindTunnelControl(const char **error);
+bool initializeDAC();
+bool setDACVoltage(float voltage);
+bool disableDACOutput();
+bool isDACConnected();
+float getCommandedDACVoltage();
+bool setDACBenchTestVoltage(float voltage, const char **error);
+bool stopDACBenchTest(const char **error);
 WindTunnelControlStatus getWindTunnelControlStatus();
 
 float mphToRPM(float mph);

@@ -119,7 +119,7 @@
           </div>
         </div>
       </div>
-      <div class="notice">Force measurements require valid load-cell calibration. Actual wind speed is unknown because no verified airspeed sensor is configured. Fan output is disabled.</div>
+      <div class="notice">Force measurements require valid load-cell calibration. Actual wind speed is unknown because no verified airspeed sensor is configured. Hardware tunnel control is disabled by default.</div>
     </section>
 
     <section class="page" id="measurements">
@@ -178,7 +178,10 @@
               <span>Requested target</span><span class="value"><span id="tunnelTarget">—</span> mph</span>
               <span>Estimated fan speed</span><span class="value"><span id="tunnelRpm">—</span> RPM</span>
               <span>Calculated control voltage</span><span class="value"><span id="tunnelVoltage">—</span> V (not measured output)</span>
+              <span>DAC command sent</span><span class="value"><span id="tunnelCommandedVoltage">—</span></span>
+              <span>Physical voltage verified</span><span class="value" id="tunnelVoltageVerified">No feedback</span>
               <span>DAC status</span><span class="value" id="tunnelDacStatus">Unavailable</span>
+              <span>Control mode</span><span class="value" id="tunnelControlMode">Simulation</span>
               <span>Tunnel status</span><span class="value" id="tunnelRunning">Stopped</span>
               <span>Stabilization timer</span><span class="value" id="tunnelTimer">Not running</span>
               <span>Actual wind speed</span><span class="value">Unknown</span>
@@ -188,6 +191,21 @@
               <button id="applySpeedBtn" onclick="applyTunnelSpeed()">Apply Speed</button>
             </div>
             <div class="message" id="tunnelMessage" role="status">Simulation mode; no physical fan command is sent.</div>
+          </div>
+          <div class="notice" id="dacBenchPanel" hidden>
+            <strong>DAC Bench Test</strong>
+            <div class="muted">Use only with the H-6910 disconnected. Confirm VOUT0 with a multimeter; the ESP32 cannot verify analog output voltage.</div>
+            <div class="actions" style="margin-top: 10px">
+              <select id="dacBenchVoltage" aria-label="Bench-test output voltage">
+                <option value="0">0 V</option>
+                <option value="2">2 V</option>
+                <option value="5">5 V</option>
+                <option value="7">7 V</option>
+                <option value="9">9 V</option>
+              </select>
+              <button id="dacBenchOutputBtn" onclick="setDacBenchVoltage()">Set VOUT0</button>
+              <button id="dacBenchStopBtn" onclick="stopDacBench()">Return to 0 V</button>
+            </div>
           </div>
           <div class="form-grid two">
             <div>
@@ -218,7 +236,7 @@
               <div class="muted">Enter 1–50 Hz or choose a preset.</div>
             </div>
           </div>
-          <div class="notice">The setpoint is not measured wind speed and does not control the fan. Settings apply when a test starts. Sensor readings are recorded only while the test is active.</div>
+          <div class="notice">The setpoint is a target, not a measured wind speed. It controls no physical output in simulation mode. Settings apply when a test starts. Sensor readings are recorded only while the test is active.</div>
           <div class="message" id="setupMessage" role="status"></div>
         </div>
       </div>
@@ -250,6 +268,8 @@
       tunnelStart: '/api/tunnel/start',
       tunnelStop: '/api/tunnel/stop',
       tunnelStatus: '/api/tunnel/status',
+      dacBenchOutput: '/api/tunnel/bench-output',
+      dacBenchStop: '/api/tunnel/bench-stop',
       calibration: '/api/calibration',
       csv: '/api/export.csv'
     };
@@ -329,7 +349,9 @@
         updateTunnelStatus(result);
         clearMeasurements();
         setRunning(true);
-        $('setupMessage').textContent = 'Test started in simulation mode; no physical fan command was sent.';
+        $('setupMessage').textContent = result.controlMode === 'hardware'
+          ? 'Test started; DAC command sent, but physical output voltage is not measured.'
+          : 'Test started in simulation mode; no physical fan command was sent.';
       } catch (error) {
         $('setupMessage').textContent = `Could not start test: ${error.message}`;
       }
@@ -362,11 +384,19 @@
         status.calculatedVoltage !== undefined && Number.isFinite(Number(status.calculatedVoltage))
         ? Number(status.calculatedVoltage).toFixed(2)
         : '—';
+      $('tunnelCommandedVoltage').textContent = status.commandedVoltage !== null &&
+        status.commandedVoltage !== undefined && Number.isFinite(Number(status.commandedVoltage))
+        ? `${Number(status.commandedVoltage).toFixed(3)} V ${status.commandAccepted ? 'sent' : 'last command (status uncertain)'}`
+        : 'No command';
+      $('tunnelVoltageVerified').textContent = status.outputVoltageVerified
+        ? 'Verified by feedback'
+        : 'Not measured';
       $('tunnelDacStatus').textContent = status.dacConnected
-        ? 'Connected'
-        : 'Unavailable (simulation only)';
+        ? `Connected (${status.dacType || 'DAC'} ${status.dacAddress || ''})`
+        : 'Unavailable';
+      $('tunnelControlMode').textContent = status.controlMode || 'Simulation';
       $('tunnelRunning').textContent = status.running
-        ? 'Running (simulation)'
+        ? (status.controlMode === 'hardware' ? 'Running (DAC command)' : 'Running (simulation)')
         : 'Stopped';
       const elapsed = Number(status.stabilizationElapsedMs);
       const period = Number(status.stabilizationPeriodMs);
@@ -378,6 +408,37 @@
         : 'Not verified (no airspeed sensor)';
       $('tunnelMessage').textContent = status.message ||
         'Simulation mode; no physical fan command is sent.';
+      $('dacBenchPanel').hidden = !status.dacBenchTestEnabled;
+    }
+
+    async function setDacBenchVoltage() {
+      try {
+        const status = await requestJson(API.dacBenchOutput, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ voltage: Number($('dacBenchVoltage').value) })
+        });
+        updateTunnelStatus(status);
+        $('tunnelMessage').textContent =
+          'VOUT0 command sent; verify the voltage using a multimeter. Keep the tunnel disconnected.';
+      } catch (error) {
+        $('tunnelMessage').textContent = `DAC bench command failed: ${error.message}`;
+      }
+    }
+
+    async function stopDacBench() {
+      try {
+        const status = await requestJson(API.dacBenchStop, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        updateTunnelStatus(status);
+        $('tunnelMessage').textContent =
+          '0 V bench command sent; confirm VOUT0 with a multimeter. This does not verify a safe fan stop.';
+      } catch (error) {
+        $('tunnelMessage').textContent = `DAC bench stop failed: ${error.message}`;
+      }
     }
 
     async function applyTunnelSpeed() {

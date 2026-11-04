@@ -80,6 +80,14 @@ void sendError(AsyncWebServerRequest *request, int status,
 
 void addTunnelStatus(JsonDocument &response) {
   const WindTunnelControlStatus status = getWindTunnelControlStatus();
+  char dacAddress[7];
+  snprintf(dacAddress, sizeof(dacAddress), "0x%02X",
+           Config::DacI2cAddress);
+  response["dacType"] = "DFRobot DFR0971";
+  response["dacAddress"] = dacAddress;
+  response["dacChannel"] = Config::DacOutputChannel;
+  response["dacBenchTestEnabled"] =
+      Config::DacBenchTestEnabled && !Config::TunnelHardwareControlEnabled;
   response["targetSpeedMph"] = status.targetSpeedMph;
   if (status.calculationAvailable) {
     response["estimatedFanRPM"] = status.estimatedFanRpm;
@@ -90,6 +98,14 @@ void addTunnelStatus(JsonDocument &response) {
   }
   response["outputEnabled"] = status.outputEnabled;
   response["dacConnected"] = status.dacConnected;
+  if (isfinite(status.commandedDacVoltage)) {
+    response["commandedVoltage"] = status.commandedDacVoltage;
+  } else {
+    response["commandedVoltage"] = nullptr;
+  }
+  response["commandAccepted"] = status.commandAccepted;
+  response["outputVoltageVerified"] = status.outputVoltageVerified;
+  response["benchTestActive"] = status.benchTestActive;
   response["actualSpeedMph"] = nullptr;
   response["running"] = status.running;
   response["tunnelRunning"] = status.running;
@@ -98,9 +114,18 @@ void addTunnelStatus(JsonDocument &response) {
   response["stabilizationTimerComplete"] =
       status.stabilizationTimerComplete;
   response["steadyStateVerified"] = status.steadyStateVerified;
-  response["controlMode"] = "simulation";
-  response["message"] =
-      "Simulation only; physical output is disabled and actual wind speed is unknown.";
+  if (status.benchTestActive) {
+    response["controlMode"] = "bench-test";
+  } else if (Config::TunnelHardwareControlEnabled &&
+             Config::TunnelSafetyPrerequisitesVerified &&
+             Config::TunnelSafeStopVerified) {
+    response["controlMode"] = "hardware";
+  } else {
+    response["controlMode"] = "simulation";
+  }
+  response["message"] = status.outputEnabled
+                            ? "DAC command issued; physical output voltage has not been measured."
+                            : "No physical wind-tunnel command is active. Actual wind speed is unknown.";
 }
 
 bool validStartSettings(JsonDocument &document, TestSettings &result) {
@@ -218,12 +243,16 @@ void handleStop(AsyncWebServerRequest *request) {
   }
   testRunning = false;
   unlockState();
-  stopWindTunnelControl();
+  const char *error = nullptr;
+  const bool stopped = stopWindTunnelControl(&error);
 
   JsonDocument response;
   response["running"] = false;
   addTunnelStatus(response);
-  sendJson(request, 200, response);
+  if (!stopped) {
+    response["error"] = error != nullptr ? error : "Tunnel safe-stop failed.";
+  }
+  sendJson(request, stopped ? 200 : 503, response);
 }
 
 void handleTunnelSetSpeed(AsyncWebServerRequest *request, uint8_t *body,
@@ -271,8 +300,53 @@ void handleTunnelStop(AsyncWebServerRequest *request) {
   }
   testRunning = false;
   unlockState();
-  stopWindTunnelControl();
+  const char *error = nullptr;
+  const bool stopped = stopWindTunnelControl(&error);
 
+  JsonDocument response;
+  addTunnelStatus(response);
+  if (!stopped) {
+    response["error"] = error != nullptr ? error : "Tunnel safe-stop failed.";
+  }
+  sendJson(request, stopped ? 200 : 503, response);
+}
+
+void handleDacBenchOutput(AsyncWebServerRequest *request, uint8_t *body,
+                          size_t length, size_t index, size_t total) {
+  if (!Config::DacBenchTestEnabled) {
+    sendError(request, 403, "DAC bench-test mode is disabled in Config.h.");
+    return;
+  }
+  if (index != 0 || length != total || total > 1024) {
+    sendError(request, 400, "Invalid or oversized request body");
+    return;
+  }
+
+  JsonDocument document;
+  if (deserializeJson(document, body, length)) {
+    sendError(request, 400, "Request body must be valid JSON");
+    return;
+  }
+
+  const float voltage = document["voltage"] | -1.0f;
+  const char *error = nullptr;
+  if (!setDACBenchTestVoltage(voltage, &error)) {
+    sendError(request, 409,
+              error != nullptr ? error : "DAC bench command was rejected.");
+    return;
+  }
+  JsonDocument response;
+  addTunnelStatus(response);
+  sendJson(request, 200, response);
+}
+
+void handleDacBenchStop(AsyncWebServerRequest *request) {
+  const char *error = nullptr;
+  if (!stopDACBenchTest(&error)) {
+    sendError(request, 409,
+              error != nullptr ? error : "DAC bench stop command failed.");
+    return;
+  }
   JsonDocument response;
   addTunnelStatus(response);
   sendJson(request, 200, response);
@@ -455,6 +529,9 @@ void configureRoutes() {
   server.on("/api/tunnel/start", HTTP_POST, handleTunnelStart);
   server.on("/api/tunnel/stop", HTTP_POST, handleTunnelStop);
   server.on("/api/tunnel/status", HTTP_GET, handleTunnelStatus);
+  server.on("/api/tunnel/bench-output", HTTP_POST, [](AsyncWebServerRequest *) {},
+            nullptr, handleDacBenchOutput);
+  server.on("/api/tunnel/bench-stop", HTTP_POST, handleDacBenchStop);
   server.on("/api/calibration", HTTP_POST, handleCalibration);
   server.on("/api/export.csv", HTTP_GET, handleExport);
 }
@@ -502,7 +579,11 @@ void updateWebServer() {
       millis() - testStartedAt >= settings.durationSeconds * 1000U) {
     testRunning = false;
     unlockState();
-    stopWindTunnelControl();
+    const char *error = nullptr;
+    if (!stopWindTunnelControl(&error)) {
+      Serial.print("ERROR: Tunnel safe-stop failed: ");
+      Serial.println(error != nullptr ? error : "unknown error");
+    }
     return;
   }
 

@@ -1,9 +1,12 @@
 #include "WindTunnelControl.h"
 
 #include <Arduino.h>
+#include <DFRobot_GP8403.h>
 #include <math.h>
+#include <Wire.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
+#include <freertos/semphr.h>
 
 #include "Config.h"
 
@@ -42,8 +45,12 @@ constexpr size_t RpmVoltageDataCount =
 portMUX_TYPE controlMux = portMUX_INITIALIZER_UNLOCKED;
 WindTunnelControlStatus controlStatus = {
     25.0f, NAN, NAN, 0, false, false,
-    false, false, false, false};
+    false, false, false, false, false, false, false, NAN};
 uint32_t controlStartedAt = 0;
+SemaphoreHandle_t dacMutex = nullptr;
+TwoWire dacWire(1);
+DFRobot_GP8403 dac(&dacWire, Config::DacI2cAddress);
+bool dacBusStarted = false;
 
 bool interpolate(float input, float &output, float firstX, float lastX,
                  const float *xValues, const float *yValues, size_t count) {
@@ -63,12 +70,6 @@ bool interpolate(float input, float &output, float firstX, float lastX,
   return false;
 }
 
-bool initializeDAC() { return false; }
-
-bool setDACVoltage(float) { return false; }
-
-bool disableDACOutput() { return false; }
-
 void invalidateTarget() {
   portENTER_CRITICAL(&controlMux);
   controlStatus.calculationAvailable = false;
@@ -77,6 +78,160 @@ void invalidateTarget() {
   portEXIT_CRITICAL(&controlMux);
 }
 }  // namespace
+
+bool initializeDAC() {
+  if (dacMutex == nullptr || xSemaphoreTake(dacMutex, portMAX_DELAY) != pdTRUE) {
+    return false;
+  }
+
+  if (isDACConnected()) {
+    xSemaphoreGive(dacMutex);
+    return true;
+  }
+
+  if (!dacBusStarted) {
+    dacBusStarted = dacWire.begin(Config::DacI2cSdaPin,
+                                  Config::DacI2cSclPin);
+  }
+  const bool initialized =
+      dacBusStarted && dac.begin() == 0;
+  if (initialized) {
+    dac.setDACOutRange(DFRobot_GP8403::eOutputRange10V);
+    dacWire.beginTransmission(Config::DacI2cAddress);
+  }
+  const bool connected =
+      initialized && dacWire.endTransmission() == 0;
+  portENTER_CRITICAL(&controlMux);
+  controlStatus.dacConnected = connected;
+  portEXIT_CRITICAL(&controlMux);
+  xSemaphoreGive(dacMutex);
+  return connected;
+}
+
+bool setDACVoltage(float voltage) {
+  if (!isfinite(voltage) || voltage < 0.0f ||
+      voltage > Config::DacOutputRangeVolts || !isDACConnected() ||
+      dacMutex == nullptr || xSemaphoreTake(dacMutex, portMAX_DELAY) != pdTRUE) {
+    return false;
+  }
+
+  const uint16_t millivolts =
+      static_cast<uint16_t>(lroundf(voltage * 1000.0f));
+  // The GP8403 library converts millivolts to its 12-bit code for the selected range.
+  dac.setDACOutVoltage(millivolts, Config::DacOutputChannel);
+
+  // The library setter returns void, so this confirms bus presence, not output voltage.
+  dacWire.beginTransmission(Config::DacI2cAddress);
+  const bool connected = dacWire.endTransmission() == 0;
+  portENTER_CRITICAL(&controlMux);
+  controlStatus.dacConnected = connected;
+  controlStatus.commandAccepted = connected;
+  controlStatus.outputVoltageVerified = false;
+  if (connected) {
+    controlStatus.commandedDacVoltage = millivolts / 1000.0f;
+  }
+  portEXIT_CRITICAL(&controlMux);
+  xSemaphoreGive(dacMutex);
+  return connected;
+}
+
+bool disableDACOutput() {
+  if (!Config::TunnelHardwareControlEnabled ||
+      !Config::TunnelSafetyPrerequisitesVerified ||
+      !Config::TunnelSafeStopVerified ||
+      !isfinite(Config::TunnelSafeStopVoltage) ||
+      Config::TunnelSafeStopVoltage < 0.0f ||
+      Config::TunnelSafeStopVoltage > Config::DacOutputRangeVolts) {
+    return false;
+  }
+  return setDACVoltage(Config::TunnelSafeStopVoltage);
+}
+
+bool isDACConnected() {
+  portENTER_CRITICAL(&controlMux);
+  const bool connected = controlStatus.dacConnected;
+  portEXIT_CRITICAL(&controlMux);
+  return connected;
+}
+
+float getCommandedDACVoltage() {
+  portENTER_CRITICAL(&controlMux);
+  const float voltage = controlStatus.commandedDacVoltage;
+  portEXIT_CRITICAL(&controlMux);
+  return voltage;
+}
+
+bool setDACBenchTestVoltage(float voltage, const char **error) {
+  constexpr float testVoltages[] = {0.0f, 2.0f, 5.0f, 7.0f, 9.0f};
+  bool supportedVoltage = false;
+  for (float testVoltage : testVoltages) {
+    if (fabsf(voltage - testVoltage) < 0.001f) {
+      supportedVoltage = true;
+      break;
+    }
+  }
+  if (!Config::DacBenchTestEnabled ||
+      Config::TunnelHardwareControlEnabled) {
+    if (error != nullptr) {
+      *error = "DAC bench-test mode is disabled in Config.h.";
+    }
+    return false;
+  }
+  if (!supportedVoltage) {
+    if (error != nullptr) {
+      *error = "Bench voltage must be one of 0, 2, 5, 7, or 9 V.";
+    }
+    return false;
+  }
+  if (getWindTunnelControlStatus().running) {
+    if (error != nullptr) {
+      *error = "Stop the test before using DAC bench-test mode.";
+    }
+    return false;
+  }
+  if (!isDACConnected() && !initializeDAC()) {
+    if (error != nullptr) {
+      *error = "DFR0971 is not connected on its configured I2C bus.";
+    }
+    return false;
+  }
+  if (!setDACVoltage(voltage)) {
+    if (error != nullptr) {
+      *error = "Could not communicate with the DFR0971.";
+    }
+    return false;
+  }
+  portENTER_CRITICAL(&controlMux);
+  controlStatus.benchTestActive = true;
+  portEXIT_CRITICAL(&controlMux);
+  if (error != nullptr) {
+    *error = nullptr;
+  }
+  return true;
+}
+
+bool stopDACBenchTest(const char **error) {
+  if (!Config::DacBenchTestEnabled ||
+      Config::TunnelHardwareControlEnabled) {
+    if (error != nullptr) {
+      *error = "DAC bench-test mode is disabled in Config.h.";
+    }
+    return false;
+  }
+  if (!setDACVoltage(0.0f)) {
+    if (error != nullptr) {
+      *error = "Could not send the 0 V bench-test command.";
+    }
+    return false;
+  }
+  portENTER_CRITICAL(&controlMux);
+  controlStatus.benchTestActive = false;
+  portEXIT_CRITICAL(&controlMux);
+  if (error != nullptr) {
+    *error = nullptr;
+  }
+  return true;
+}
 
 float mphToRPM(float mph) {
   if (!isfinite(mph) || mph < Config::MinTunnelSpeedMph ||
@@ -121,20 +276,43 @@ float mphToVoltage(float mph) {
 }
 
 void initializeWindTunnelControl() {
-  const bool dacReady =
-      Config::TunnelPhysicalOutputEnabled && initializeDAC();
+  dacMutex = xSemaphoreCreateMutex();
   portENTER_CRITICAL(&controlMux);
   controlStatus.targetSpeedMph = 25.0f;
   controlStatus.estimatedFanRpm = NAN;
   controlStatus.calculatedVoltage = NAN;
   controlStatus.stabilizationElapsedMs = 0;
   controlStatus.calculationAvailable = false;
-  controlStatus.dacConnected = dacReady;
+  controlStatus.dacConnected = false;
   controlStatus.outputEnabled = false;
   controlStatus.running = false;
   controlStatus.stabilizationTimerComplete = false;
   controlStatus.steadyStateVerified = false;
+  controlStatus.commandAccepted = false;
+  controlStatus.outputVoltageVerified = false;
+  controlStatus.benchTestActive = false;
+  controlStatus.commandedDacVoltage = NAN;
   controlStartedAt = 0;
+  portEXIT_CRITICAL(&controlMux);
+
+  const bool shouldInitializeDac =
+      Config::TunnelHardwareControlEnabled || Config::DacBenchTestEnabled;
+  bool dacReady = shouldInitializeDac && initializeDAC();
+  if (dacMutex == nullptr) {
+    Serial.println("ERROR: Could not create the DAC bus mutex.");
+  }
+  if (shouldInitializeDac && !dacReady) {
+    Serial.println("ERROR: DFR0971 DAC initialization failed.");
+  }
+  if (dacReady && Config::TunnelHardwareControlEnabled &&
+      Config::TunnelSafetyPrerequisitesVerified &&
+      Config::TunnelSafeStopVerified &&
+      !setDACVoltage(Config::TunnelSafeStopVoltage)) {
+    dacReady = false;
+    Serial.println("ERROR: Could not command the configured DAC safe-stop state.");
+  }
+  portENTER_CRITICAL(&controlMux);
+  controlStatus.dacConnected = dacReady;
   portEXIT_CRITICAL(&controlMux);
 }
 
@@ -177,10 +355,11 @@ bool setWindTunnelTargetSpeed(float mph, const char **error) {
   }
 
   portENTER_CRITICAL(&controlMux);
-  if (controlStatus.running) {
+  if (controlStatus.running || controlStatus.benchTestActive) {
     portEXIT_CRITICAL(&controlMux);
     if (error != nullptr) {
-      *error = "Stop the current test before applying a different target.";
+      *error =
+          "Stop the current test or DAC bench test before applying a target.";
     }
     return false;
   }
@@ -194,6 +373,13 @@ bool setWindTunnelTargetSpeed(float mph, const char **error) {
 
 bool startWindTunnelControl(const char **error) {
   portENTER_CRITICAL(&controlMux);
+  if (controlStatus.benchTestActive) {
+    portEXIT_CRITICAL(&controlMux);
+    if (error != nullptr) {
+      *error = "Stop DAC bench-test mode before starting a tunnel test.";
+    }
+    return false;
+  }
   if (!controlStatus.calculationAvailable) {
     portEXIT_CRITICAL(&controlMux);
     if (error != nullptr) {
@@ -202,7 +388,25 @@ bool startWindTunnelControl(const char **error) {
     return false;
   }
 
-  if (Config::TunnelPhysicalOutputEnabled) {
+  if (!controlStatus.running && controlStatus.outputEnabled) {
+    portEXIT_CRITICAL(&controlMux);
+    if (error != nullptr) {
+      *error = "A previous DAC stop command failed; check the output before retrying.";
+    }
+    return false;
+  }
+
+  if (Config::TunnelHardwareControlEnabled) {
+    if (!Config::TunnelSafetyPrerequisitesVerified ||
+        !Config::TunnelSafeStopVerified) {
+      portEXIT_CRITICAL(&controlMux);
+      if (error != nullptr) {
+        *error =
+            "Hardware control is locked until tunnel input and safe-stop "
+            "requirements are verified in Config.h.";
+      }
+      return false;
+    }
     const float voltage = controlStatus.calculatedVoltage;
     const bool dacConnected = controlStatus.dacConnected;
     portEXIT_CRITICAL(&controlMux);
@@ -231,19 +435,28 @@ bool startWindTunnelControl(const char **error) {
   return true;
 }
 
-void stopWindTunnelControl() {
+bool stopWindTunnelControl(const char **error) {
   portENTER_CRITICAL(&controlMux);
   const bool outputEnabled = controlStatus.outputEnabled;
   controlStatus.running = false;
-  controlStatus.outputEnabled = false;
   controlStatus.stabilizationElapsedMs = 0;
   controlStatus.stabilizationTimerComplete = false;
   controlStatus.steadyStateVerified = false;
   portEXIT_CRITICAL(&controlMux);
 
-  if (outputEnabled && Config::TunnelPhysicalOutputEnabled) {
-    disableDACOutput();
+  if (outputEnabled && !disableDACOutput()) {
+    if (error != nullptr) {
+      *error = "Safe-stop command failed; the DAC output state is unknown.";
+    }
+    return false;
   }
+  portENTER_CRITICAL(&controlMux);
+  controlStatus.outputEnabled = false;
+  portEXIT_CRITICAL(&controlMux);
+  if (error != nullptr) {
+    *error = nullptr;
+  }
+  return true;
 }
 
 WindTunnelControlStatus getWindTunnelControlStatus() {
