@@ -78,7 +78,7 @@ bool initializeLoadCellInputs() {
   ads.setDataRate(Config::AdsDataRate);
   setAdsConnected(true);
   setAdsError("");
-  Serial.println("ADS1115 detected; gain range is +/- 0.256 V.");
+  Serial.println("ADS1115 detected; differential gain range is +/- 4.096 V.");
   Serial.println(Config::UseSingleEndedInputs
                      ? "ADC inputs: single-ended"
                      : "ADC inputs: differential lift A0-A1, drag A2-A3");

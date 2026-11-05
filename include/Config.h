@@ -13,7 +13,7 @@ namespace Config {
 constexpr uint8_t AdsAddress = 0x48;
 constexpr int I2cSdaPin = 21;
 constexpr int I2cSclPin = 22;
-constexpr adsGain_t AdsGain = GAIN_SIXTEEN;  // +/- 0.256 V full scale.
+constexpr adsGain_t AdsGain = GAIN_ONE;  // +/- 4.096 V full scale.
 constexpr uint16_t AdsDataRate = RATE_ADS1115_860SPS;
 constexpr uint32_t InputSamplingIntervalMs = 0;
 constexpr uint32_t ConversionTimeoutMs = 40;

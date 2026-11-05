@@ -104,7 +104,6 @@
             <span>ESP32</span><span class="value" id="espStatus">Unknown</span>
             <span>ADS1115</span><span class="value" id="adcStatus">Unknown</span>
             <span>Test</span><span class="value" id="testState">No active test</span>
-            <span>Calibrated windspeed</span><span class="value"><span id="overviewCalibratedSpeed">—</span> mph</span>
             <span>Wind-speed setpoint</span><span class="value"><span id="overviewSetpoint">—</span> mph</span>
             <span>Calibration</span><span class="value" id="overviewCalibration">Unknown</span>
           </div>
@@ -153,6 +152,7 @@
           </div>
           <h3>Output Voltage History</h3>
           <div class="muted">Vertical axis: filtered voltage (mV) · Horizontal axis: sample sequence</div>
+          <div class="message" id="adcSaturationNotice" role="status" hidden>ADC is at its measurement limit; verify analog signal range and hardware wiring.</div>
           <div class="chart-wrap"><canvas id="chart" aria-label="Lift and drag output voltage in millivolts over time"></canvas></div>
           <div class="legend">
             <span id="liftLegend">Lift voltage</span>
@@ -180,11 +180,11 @@
             </div>
             <div>
               <label for="object">Test object</label>
-              <select id="object"><option>NACA 4424</option><option>NACA 6412</option></select>
+              <select id="object" onchange="selectCalibrationObject(this.value)"><option>NACA 4424</option><option>NACA 6412</option></select>
             </div>
             <div>
               <label for="units">Force display units</label>
-              <select id="units"><option value="N">Newtons (N)</option><option value="lbf">Pounds-force (lbf)</option><option value="g">Grams-force (g)</option></select>
+              <select id="units" onchange="updateSteadyStateToleranceUnit()"><option value="N">Newtons (N)</option><option value="lbf">Pounds-force (lbf)</option><option value="g">Grams-force (g)</option></select>
             </div>
           </div>
           <div class="form-grid" style="margin-top: 14px">
@@ -254,7 +254,7 @@
           </div>
           <div class="form-grid" style="margin-top: 14px">
             <div>
-              <label for="steadyStateError">Steady-state error tolerance (N)</label>
+              <label for="steadyStateError">Steady-state error tolerance (<span id="steadyStateToleranceUnit">N</span>)</label>
               <input id="steadyStateError" type="number" min="0.001" max="100" step="any" value="0.05" required>
             </div>
             <div>
@@ -266,7 +266,7 @@
               <input id="steadyStateHold" type="number" min="1" max="3600" step="1" value="2" required>
             </div>
           </div>
-          <div class="notice">Steady state requires both calibrated load-cell readings to stay within the error tolerance of their moving averages for the required duration. The sweep advances when steady state is reached or the per-speed timeout expires. A timeout does not indicate steady state.</div>
+          <div class="notice">Steady state requires both calibrated load-cell readings to stay within the configured force tolerance of their moving averages for the required duration. The sweep advances when steady state is reached or the per-speed timeout expires; a timeout does not indicate steady state.</div>
           <div class="message" id="setupMessage" role="status"></div>
         </div>
       </div>
@@ -280,7 +280,14 @@
             <span>Calibration status</span><span class="value" id="calibrationStatus">Unknown</span>
             <span>Force output</span><span class="value" id="forceStatus">Unavailable</span>
           </div>
-          <p>Current team: <strong id="calibrationTeam">No team selected</strong>. Enter a known weight range that includes zero, then record both sensor output voltages at each weight. Weights are entered in grams; the measured zero reference is used to balance the curve.</p>
+          <p>Current team: <strong id="calibrationTeam">No team selected</strong>. Calibration data is stored separately for each test object. Enter a known weight range that includes zero and record both sensor output voltages at each weight. Weights are entered in grams; a best-fit curve balances the zero reference.</p>
+          <div>
+            <label for="calibrationObject">Test object</label>
+            <select id="calibrationObject" onchange="selectCalibrationObject(this.value)">
+              <option>NACA 4424</option>
+              <option>NACA 6412</option>
+            </select>
+          </div>
           <div class="form-grid">
             <div><label for="startWeight">Start weight (g)</label><input id="startWeight" type="number" step="any" value="0" required></div>
             <div><label for="endWeight">End weight (g)</label><input id="endWeight" type="number" step="any" value="500" required></div>
@@ -327,6 +334,31 @@
     let lastSequence = null;
     let measurementSocket = null;
     let measurementReconnectTimer = null;
+    let steadyToleranceUnit = 'N';
+
+    function forceUnitToNewtons(unit) {
+      if (unit === 'lbf') return 4.4482216153;
+      if (unit === 'g') return 0.00980665;
+      return 1;
+    }
+
+    function updateSteadyStateToleranceUnit() {
+      const input = $('steadyStateError');
+      const selectedUnit = $('units').value;
+      const currentValue = Number(input.value);
+      if (Number.isFinite(currentValue) && currentValue > 0) {
+        const toleranceNewtons =
+          currentValue * forceUnitToNewtons(steadyToleranceUnit);
+        input.value = String(Number(
+          (toleranceNewtons / forceUnitToNewtons(selectedUnit)).toPrecision(6)
+        ));
+      }
+      steadyToleranceUnit = selectedUnit;
+      $('steadyStateToleranceUnit').textContent =
+        selectedUnit === 'g' ? 'gf' : selectedUnit;
+      input.min = String(0.001 / forceUnitToNewtons(selectedUnit));
+      input.max = String(100 / forceUnitToNewtons(selectedUnit));
+    }
 
     function showPage(page) {
       document.querySelectorAll('.page').forEach(section => section.classList.toggle('active', section.id === page));
@@ -360,6 +392,7 @@
       $('overviewLift').textContent = '—';
       $('overviewDrag').textContent = '—';
       $('sampleCount').textContent = '0';
+      $('adcSaturationNotice').hidden = true;
       $('measurementState').textContent = 'No active test';
       $('steadyStateTestStatus').textContent = 'Steady state is evaluated during an active test.';
       drawChart();
@@ -414,7 +447,9 @@
         endSpeed: Number($('endSpeed').value),
         speedIncrement: Number($('speedIncrement').value),
         stabilizationSeconds: Number($('stabilizationSeconds').value),
-        steadyStateErrorNewtons: Number($('steadyStateError').value),
+        steadyStateErrorNewtons:
+          Number($('steadyStateError').value) *
+          forceUnitToNewtons($('units').value),
         movingAverageWindowMs: Math.round(Number($('movingAverageWindow').value) * 1000),
         steadyStateHoldSeconds: Number($('steadyStateHold').value),
         sampleRate: Number($('sampleRate').value)
@@ -454,10 +489,6 @@
       $('tunnelTarget').textContent = Number.isFinite(Number(status.targetSpeedMph))
         ? Number(status.targetSpeedMph).toFixed(1)
         : '—';
-      $('overviewCalibratedSpeed').textContent =
-        Number.isFinite(Number(status.calibratedSpeedMph))
-          ? Number(status.calibratedSpeedMph).toFixed(1)
-          : '—';
       $('tunnelRpm').textContent = status.estimatedFanRPM !== null &&
         status.estimatedFanRPM !== undefined && Number.isFinite(Number(status.estimatedFanRPM))
         ? Number(status.estimatedFanRPM).toFixed(0)
@@ -560,6 +591,9 @@
           data.sampleSequence === lastSequence) return;
       $('liftRaw').textContent = Number(data.liftRaw).toFixed(1);
       $('dragRaw').textContent = Number(data.dragRaw).toFixed(1);
+      $('adcSaturationNotice').hidden =
+        Math.max(Math.abs(Number(data.liftRaw)), Math.abs(Number(data.dragRaw))) <
+        32000;
       $('liftVolts').textContent = Number(data.liftVolts).toFixed(6);
       $('dragVolts').textContent = Number(data.dragVolts).toFixed(6);
       $('liftValue').textContent = displayForce(data.lift);
@@ -617,7 +651,10 @@
 
     async function refreshStatus() {
       try {
-        const status = await requestJson(API.status, { cache: 'no-store' });
+        const status = await requestJson(
+          `${API.status}?object=${encodeURIComponent($('object').value)}`,
+          { cache: 'no-store' }
+        );
         $('connectionText').textContent = status.wifiConnected ? 'ESP32 connected' : 'ESP32 · Wi-Fi disconnected';
         $('espStatus').textContent = 'Connected';
         $('adcStatus').textContent = status.adsAvailable ? 'Connected' : (status.adsError || 'Disconnected');
@@ -627,7 +664,6 @@
         $('overviewCalibration').textContent = calibrationText;
         $('forceStatus').textContent = calibrationLoaded ? 'Available' : 'Unavailable';
         $('overviewSetpoint').textContent = Number(status.setpoint).toFixed(1);
-        $('overviewCalibratedSpeed').textContent = Number(status.calibratedSpeedMph).toFixed(1);
         $('overviewTeam').textContent = status.team || '—';
         $('overviewObject').textContent = status.running ? status.object : '—';
         setRunning(Boolean(status.running));
@@ -641,7 +677,11 @@
 
     async function refreshCalibration() {
       try {
-        const result = await requestJson(API.calibration, { cache: 'no-store' });
+        const object = $('object').value;
+        const result = await requestJson(
+          `${API.calibration}?object=${encodeURIComponent(object)}`,
+          { cache: 'no-store' }
+        );
         calibrationLoaded = Boolean(result.calibrationLoaded);
         $('calibrationStatus').textContent = calibrationLoaded ? 'Loaded' : 'Not calibrated';
         $('overviewCalibration').textContent = calibrationLoaded ? 'Loaded' : 'Not calibrated';
@@ -656,11 +696,18 @@
           buildCalibrationTable(result.points);
         }
         $('calibrationMessage').textContent = calibrationLoaded
-          ? 'Calibration loaded from ESP32 storage.'
-          : 'No calibration is saved for this team yet.';
+          ? `Calibration for ${object} loaded from ESP32 storage.`
+          : `No calibration is saved for ${object} on this team yet.`;
       } catch (error) {
         $('calibrationMessage').textContent = `Could not load calibration: ${error.message}`;
       }
+    }
+
+    function selectCalibrationObject(object) {
+      $('object').value = object;
+      $('calibrationObject').value = object;
+      refreshCalibration();
+      refreshStatus();
     }
 
     async function refreshTeams() {
@@ -698,6 +745,7 @@
         });
         $('calibrationTeam').textContent = name;
         refreshCalibration();
+        refreshStatus();
       } catch (error) {
         $('setupMessage').textContent = `Could not select team: ${error.message}`;
         refreshTeams();
@@ -799,6 +847,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            object: $('object').value,
             startWeightGrams: points[0].weightGrams,
             endWeightGrams: points[points.length - 1].weightGrams,
             incrementGrams: Number($('incrementWeight').value),
@@ -807,7 +856,7 @@
         });
         calibrationLoaded = Boolean(result.calibrationLoaded);
         $('calibrationMessage').textContent =
-          `Saved ${result.pointCount} calibration points for ${result.team} on the ESP32.`;
+          `Saved ${result.pointCount} calibration points for ${result.team} / ${$('object').value} on the ESP32.`;
         $('calibrationStatus').textContent = 'Loaded';
         $('overviewCalibration').textContent = 'Loaded';
         $('forceStatus').textContent = 'Available';
@@ -906,6 +955,7 @@
     }
 
     connectPreset('sampleRate', 'sampleRatePreset');
+    updateSteadyStateToleranceUnit();
     updateMeasurementVisibility();
     window.addEventListener('resize', drawChart);
     connectMeasurementSocket();

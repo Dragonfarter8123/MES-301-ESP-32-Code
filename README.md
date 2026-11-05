@@ -31,27 +31,36 @@ Without this local file, the firmware still builds and starts the web server,
 but does not connect to Wi-Fi.
 
 The default ADC configuration is address `0x48`, SDA 21, SCL 22, gain
-`GAIN_SIXTEEN` (±0.256 V full scale), and differential A0-A1/A2-A3. To test
-single-ended output wiring, set `UseSingleEndedInputs` to `true` and select
-the lift/drag channels in `Config.h`.
+`GAIN_ONE` (±4.096 V differential full scale), and differential A0-A1/A2-A3.
+To test single-ended output wiring, set `UseSingleEndedInputs` to `true` and
+select the lift/drag channels in `Config.h`.
 
 **Check analog voltage compatibility before connecting the AD623 outputs.**
-The ADS1115 inputs must remain between ground and the ADS1115 supply, and at
-`GAIN_SIXTEEN` the measured differential signal must remain within ±0.256 V.
-Common-mode voltage also matters. The AD623 supply rails, gain, reference, and
+The ADC was previously configured for only ±0.256 V differential full scale,
+which could clip larger signals in software-visible samples. The gain is now
+`GAIN_ONE` (±4.096 V) to remove that firmware range limit; the graph
+automatically scales to the samples it receives. The analog input pins must
+remain within the ADS1115 supply rails, and common-mode voltage also matters.
+ADC readings near full scale indicate that the physical signal may still be
+outside the configured range. The AD623 supply rails, gain, reference, and
 output range were not provided, so compatibility cannot be confirmed from
 software; verify the amplifier output with a meter before connection.
 
 Create teams in the dashboard; team names and the selected team are saved in
 SPIFFS (`/station.json`) and survive restart or power loss. Calibration is
-stored independently for each team. Enter a known weight range that brackets
-zero and the lift/drag output voltages for each weight. Voltage values must be
-strictly monotonic for each sensor. The firmware interpolates between adjacent
-calibration points (rather than assuming a single linear scale), estimates the
-zero-load voltage from the curve, and converts the balanced result from grams
-to Newtons. Readings outside the calibrated voltage range are unavailable
-rather than extrapolated. Calibration only describes the data supplied by the
-operator; validate the sensor, loads, and units physically.
+stored independently for each team and test object. Select a team and object,
+then enter a known weight range that brackets zero and the lift/drag output
+voltages for each weight. Voltage values must be strictly monotonic for each
+sensor. With three or more points, the firmware fits a monotonic quadratic
+least-squares curve for each sensor; with two points, or when a quadratic fit
+would reverse direction, it uses a linear least-squares fit. It also fits the
+voltage-versus-weight curve to estimate the zero-load voltage and balances
+the force output before converting grams to Newtons. Readings outside the
+calibrated voltage range are unavailable rather than extrapolated. Calibration
+only describes the data supplied by the operator; validate the sensor, loads,
+and units physically. Existing team-only calibration records are preserved
+under the default object, NACA 4424, because the older storage format did not
+record an object association.
 Generated calibration weights are editable row by row before saving; the
 weights must remain increasing and include zero.
 Uploading a replacement SPIFFS filesystem image can erase locally stored
@@ -74,12 +83,14 @@ actual ADC throughput. The user-configured test logging rate (up to 50 Hz)
 is separate from the ADC conversion rate.
 
 For each test speed, steady state is reached when both calibrated force
-readings remain within the configured absolute error (Newtons) of their
-moving averages for the configured continuous hold duration. The moving
-average window and error tolerance are user-configurable. The sweep advances
-on steady state or when the maximum time at that speed expires; a timeout
-does not claim stability. Calibration is required for this force-based
-criterion.
+readings remain within the configured absolute force tolerance of their
+moving averages for the configured continuous hold duration. The tolerance
+is entered in the selected display unit (Newtons, pounds-force, or
+grams-force) and converted to Newtons for firmware evaluation. The
+moving-average window and hold duration are also user-configurable. The sweep
+advances on steady state or when the maximum time at that speed expires; a
+timeout does not claim stability. Calibration is required for this
+force-based criterion.
 
 ## Wind-tunnel control and DFR0971 DAC
 

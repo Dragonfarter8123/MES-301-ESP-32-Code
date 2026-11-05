@@ -40,7 +40,8 @@ struct CalibrationPoint {
 
 struct TeamRecord {
   String name;
-  std::vector<CalibrationPoint> calibration;
+  std::vector<CalibrationPoint> calibration4424;
+  std::vector<CalibrationPoint> calibration6412;
 };
 
 struct TestSample {
@@ -162,6 +163,24 @@ TeamRecord *findTeam(const String &name) {
   return nullptr;
 }
 
+bool validCalibrationObject(const String &object) {
+  return object == "NACA 4424" || object == "NACA 6412";
+}
+
+std::vector<CalibrationPoint> *calibrationForObject(TeamRecord &team,
+                                                    const String &object) {
+  if (object == "NACA 4424") return &team.calibration4424;
+  if (object == "NACA 6412") return &team.calibration6412;
+  return nullptr;
+}
+
+const std::vector<CalibrationPoint> *
+calibrationForObject(const TeamRecord &team, const String &object) {
+  if (object == "NACA 4424") return &team.calibration4424;
+  if (object == "NACA 6412") return &team.calibration6412;
+  return nullptr;
+}
+
 bool validCalibration(const std::vector<CalibrationPoint> &points) {
   if (points.size() < 2 || points.size() > MaxCalibrationPoints ||
       points.front().weightGrams > 0.0f ||
@@ -197,12 +216,20 @@ bool writeStationData(const std::vector<TeamRecord> &records,
   for (const TeamRecord &team : records) {
     JsonObject item = teamArray.add<JsonObject>();
     item["name"] = team.name;
-    JsonArray points = item["calibration"].to<JsonArray>();
-    for (const CalibrationPoint &point : team.calibration) {
-      JsonObject entry = points.add<JsonObject>();
-      entry["weightGrams"] = point.weightGrams;
-      entry["liftVolts"] = point.liftVolts;
-      entry["dragVolts"] = point.dragVolts;
+    JsonArray calibrations = item["calibrations"].to<JsonArray>();
+    const char *objects[] = {"NACA 4424", "NACA 6412"};
+    const std::vector<CalibrationPoint> *objectPoints[] = {
+        &team.calibration4424, &team.calibration6412};
+    for (size_t objectIndex = 0; objectIndex < 2; ++objectIndex) {
+      JsonObject calibration = calibrations.add<JsonObject>();
+      calibration["object"] = objects[objectIndex];
+      JsonArray points = calibration["points"].to<JsonArray>();
+      for (const CalibrationPoint &point : *objectPoints[objectIndex]) {
+        JsonObject entry = points.add<JsonObject>();
+        entry["weightGrams"] = point.weightGrams;
+        entry["liftVolts"] = point.liftVolts;
+        entry["dragVolts"] = point.dragVolts;
+      }
     }
   }
 
@@ -261,14 +288,34 @@ void loadStationData() {
     }
     TeamRecord team;
     team.name = name;
-    for (JsonObjectConst point : item["calibration"].as<JsonArrayConst>()) {
-      team.calibration.push_back(
-          {point["weightGrams"] | NAN, point["liftVolts"] | NAN,
-           point["dragVolts"] | NAN});
+    JsonArrayConst calibrations = item["calibrations"].as<JsonArrayConst>();
+    if (!calibrations.isNull()) {
+      for (JsonObjectConst calibration : calibrations) {
+        const String object = calibration["object"] | "";
+        std::vector<CalibrationPoint> *points =
+            calibrationForObject(team, object);
+        if (points == nullptr) continue;
+        for (JsonObjectConst point :
+             calibration["points"].as<JsonArrayConst>()) {
+          points->push_back({point["weightGrams"] | NAN,
+                             point["liftVolts"] | NAN,
+                             point["dragVolts"] | NAN});
+        }
+      }
+    } else {
+      for (JsonObjectConst point : item["calibration"].as<JsonArrayConst>()) {
+        team.calibration4424.push_back(
+            {point["weightGrams"] | NAN, point["liftVolts"] | NAN,
+             point["dragVolts"] | NAN});
+      }
     }
-    if (!team.calibration.empty() && !validCalibration(team.calibration)) {
-      team.calibration.clear();
-      Serial.println("ERROR: Invalid saved calibration ignored for a team.");
+    for (const String object : {String("NACA 4424"), String("NACA 6412")}) {
+      std::vector<CalibrationPoint> *points =
+          calibrationForObject(team, object);
+      if (!points->empty() && !validCalibration(*points)) {
+        points->clear();
+        Serial.println("ERROR: Invalid saved object calibration ignored.");
+      }
     }
     loaded.push_back(team);
   }
@@ -277,59 +324,164 @@ void loadStationData() {
   if (findTeam(String(selected)) != nullptr) currentTeam = selected;
 }
 
-float interpolateWeightAtVoltage(const std::vector<CalibrationPoint> &points,
-                                 float voltage, bool lift) {
-  if (!isfinite(voltage)) return NAN;
+struct CalibrationPolynomial {
+  double coefficients[3] = {};
+  double center = 0.0;
+  double scale = 1.0;
+};
 
-  const float firstVoltage =
-      lift ? points.front().liftVolts : points.front().dragVolts;
-  const float lastVoltage =
-      lift ? points.back().liftVolts : points.back().dragVolts;
+double calibrationX(const CalibrationPoint &point, bool lift,
+                    bool voltageToWeight) {
+  return voltageToWeight ? (lift ? point.liftVolts : point.dragVolts)
+                         : point.weightGrams;
+}
+
+double calibrationY(const CalibrationPoint &point, bool lift,
+                    bool voltageToWeight) {
+  return voltageToWeight ? point.weightGrams
+                         : (lift ? point.liftVolts : point.dragVolts);
+}
+
+bool solveCalibrationPolynomial(const std::vector<CalibrationPoint> &points,
+                                bool lift, bool voltageToWeight,
+                                uint8_t degree,
+                                CalibrationPolynomial &polynomial) {
+  double minimumX = calibrationX(points.front(), lift, voltageToWeight);
+  double maximumX = minimumX;
+  for (const CalibrationPoint &point : points) {
+    const double x = calibrationX(point, lift, voltageToWeight);
+    minimumX = min(minimumX, x);
+    maximumX = max(maximumX, x);
+  }
+  if (maximumX <= minimumX) return false;
+  polynomial.center = (minimumX + maximumX) * 0.5;
+  polynomial.scale = (maximumX - minimumX) * 0.5;
+  polynomial.coefficients[0] = 0.0;
+  polynomial.coefficients[1] = 0.0;
+  polynomial.coefficients[2] = 0.0;
+
+  double sums[5] = {};
+  double weightedSums[3] = {};
+  for (const CalibrationPoint &point : points) {
+    const double x =
+        (calibrationX(point, lift, voltageToWeight) - polynomial.center) /
+        polynomial.scale;
+    const double y = calibrationY(point, lift, voltageToWeight);
+    double power = 1.0;
+    for (uint8_t exponent = 0; exponent <= degree * 2; ++exponent) {
+      sums[exponent] += power;
+      if (exponent <= degree) weightedSums[exponent] += y * power;
+      power *= x;
+    }
+  }
+
+  double matrix[3][4] = {};
+  for (uint8_t row = 0; row <= degree; ++row) {
+    for (uint8_t column = 0; column <= degree; ++column) {
+      matrix[row][column] = sums[row + column];
+    }
+    matrix[row][degree + 1] = weightedSums[row];
+  }
+  for (uint8_t column = 0; column <= degree; ++column) {
+    uint8_t pivot = column;
+    for (uint8_t row = column + 1; row <= degree; ++row) {
+      if (fabs(matrix[row][column]) > fabs(matrix[pivot][column])) {
+        pivot = row;
+      }
+    }
+    if (fabs(matrix[pivot][column]) < 1e-12) return false;
+    if (pivot != column) {
+      for (uint8_t entry = column; entry <= degree + 1; ++entry) {
+        const double value = matrix[column][entry];
+        matrix[column][entry] = matrix[pivot][entry];
+        matrix[pivot][entry] = value;
+      }
+    }
+    const double divisor = matrix[column][column];
+    for (uint8_t entry = column; entry <= degree + 1; ++entry) {
+      matrix[column][entry] /= divisor;
+    }
+    for (uint8_t row = 0; row <= degree; ++row) {
+      if (row == column) continue;
+      const double factor = matrix[row][column];
+      for (uint8_t entry = column; entry <= degree + 1; ++entry) {
+        matrix[row][entry] -= factor * matrix[column][entry];
+      }
+    }
+  }
+  for (uint8_t coefficient = 0; coefficient <= degree; ++coefficient) {
+    polynomial.coefficients[coefficient] =
+        matrix[coefficient][degree + 1];
+  }
+  return true;
+}
+
+double evaluateCalibrationPolynomial(const CalibrationPolynomial &polynomial,
+                                     double x) {
+  const double normalized = (x - polynomial.center) / polynomial.scale;
+  return polynomial.coefficients[0] +
+         normalized * (polynomial.coefficients[1] +
+                       normalized * polynomial.coefficients[2]);
+}
+
+bool fitCalibrationPolynomial(const std::vector<CalibrationPoint> &points,
+                              bool lift, bool voltageToWeight,
+                              CalibrationPolynomial &polynomial) {
+  const double xDirection =
+      calibrationX(points.back(), lift, voltageToWeight) -
+      calibrationX(points.front(), lift, voltageToWeight);
+  const double yDirection =
+      calibrationY(points.back(), lift, voltageToWeight) -
+      calibrationY(points.front(), lift, voltageToWeight);
+  const double expectedDirection = xDirection * yDirection > 0.0 ? 1.0 : -1.0;
+  const uint8_t firstDegree = points.size() >= 3 ? 2 : 1;
+  for (int degree = firstDegree; degree >= 1; --degree) {
+    if (!solveCalibrationPolynomial(points, lift, voltageToWeight,
+                                    static_cast<uint8_t>(degree),
+                                    polynomial)) {
+      continue;
+    }
+    const double derivativeAtMinimum =
+        polynomial.coefficients[1] -
+        2.0 * polynomial.coefficients[2];
+    const double derivativeAtMaximum =
+        polynomial.coefficients[1] +
+        2.0 * polynomial.coefficients[2];
+    if (expectedDirection * derivativeAtMinimum > 1e-9 &&
+        expectedDirection * derivativeAtMaximum > 1e-9) {
+      return true;
+    }
+  }
+  return false;
+}
+
+float calibratedForceNewtons(const TeamRecord *team, const String &object,
+                             float voltage, bool lift) {
+  if (team == nullptr || !isfinite(voltage)) return NAN;
+  const std::vector<CalibrationPoint> *points =
+      calibrationForObject(*team, object);
+  if (points == nullptr || !validCalibration(*points)) return NAN;
+  CalibrationPolynomial weightFromVoltage;
+  CalibrationPolynomial voltageFromWeight;
+  if (!fitCalibrationPolynomial(*points, lift, true, weightFromVoltage) ||
+      !fitCalibrationPolynomial(*points, lift, false, voltageFromWeight)) {
+    return NAN;
+  }
+  const double firstVoltage =
+      lift ? points->front().liftVolts : points->front().dragVolts;
+  const double lastVoltage =
+      lift ? points->back().liftVolts : points->back().dragVolts;
   if (voltage < min(firstVoltage, lastVoltage) ||
       voltage > max(firstVoltage, lastVoltage)) {
     return NAN;
   }
-
-  for (size_t i = 1; i < points.size(); ++i) {
-    const float lower = lift ? points[i - 1].liftVolts : points[i - 1].dragVolts;
-    const float upper = lift ? points[i].liftVolts : points[i].dragVolts;
-    if ((voltage >= min(lower, upper)) && (voltage <= max(lower, upper))) {
-      const float fraction = (voltage - lower) / (upper - lower);
-      return points[i - 1].weightGrams +
-             fraction * (points[i].weightGrams -
-                         points[i - 1].weightGrams);
-    }
-  }
-  return NAN;
-}
-
-float interpolateZeroVoltage(const std::vector<CalibrationPoint> &points,
-                             bool lift) {
-  const float firstWeight = points.front().weightGrams;
-  size_t segment = 1;
-  while (segment < points.size() - 1 && points[segment].weightGrams < 0.0f) {
-    ++segment;
-  }
-  if (firstWeight > 0.0f) segment = 1;
-  else if (points.back().weightGrams < 0.0f) segment = points.size() - 1;
-
-  const CalibrationPoint &a = points[segment - 1];
-  const CalibrationPoint &b = points[segment];
-  const float aVoltage = lift ? a.liftVolts : a.dragVolts;
-  const float bVoltage = lift ? b.liftVolts : b.dragVolts;
-  const float fraction = -a.weightGrams / (b.weightGrams - a.weightGrams);
-  return aVoltage + fraction * (bVoltage - aVoltage);
-}
-
-float calibratedForceNewtons(const TeamRecord *team, float voltage,
-                             bool lift) {
-  if (team == nullptr || !validCalibration(team->calibration)) return NAN;
-  const float grams = interpolateWeightAtVoltage(team->calibration, voltage, lift);
-  const float zeroVoltage = interpolateZeroVoltage(team->calibration, lift);
-  const float zeroGrams =
-      interpolateWeightAtVoltage(team->calibration, zeroVoltage, lift);
+  const double zeroVoltage =
+      evaluateCalibrationPolynomial(voltageFromWeight, 0.0);
+  const double grams = evaluateCalibrationPolynomial(weightFromVoltage, voltage);
+  const double zeroGrams =
+      evaluateCalibrationPolynomial(weightFromVoltage, zeroVoltage);
   if (!isfinite(grams) || !isfinite(zeroGrams)) return NAN;
-  return (grams - zeroGrams) * 0.00980665f;
+  return static_cast<float>((grams - zeroGrams) * 0.00980665);
 }
 
 bool lockState() {
@@ -676,19 +828,29 @@ void handleTunnelStatus(AsyncWebServerRequest *request) {
 }
 
 void handleCalibration(AsyncWebServerRequest *request) {
+  const String object = request->hasParam("object")
+                            ? request->getParam("object")->value()
+                            : "NACA 4424";
+  if (!validCalibrationObject(object)) {
+    sendError(request, 400, "Select a supported test object");
+    return;
+  }
   if (!lockState()) {
     sendError(request, 503, "Calibration state is unavailable");
     return;
   }
   const TeamRecord *team = findTeam(currentTeam);
+  const std::vector<CalibrationPoint> *points =
+      team != nullptr ? calibrationForObject(*team, object) : nullptr;
   JsonDocument response;
   response["team"] = currentTeam;
+  response["object"] = object;
   response["calibrationLoaded"] =
-      team != nullptr && validCalibration(team->calibration);
-  if (team != nullptr) {
-    JsonArray points = response["points"].to<JsonArray>();
-    for (const CalibrationPoint &point : team->calibration) {
-      JsonObject item = points.add<JsonObject>();
+      points != nullptr && validCalibration(*points);
+  if (points != nullptr) {
+    JsonArray pointArray = response["points"].to<JsonArray>();
+    for (const CalibrationPoint &point : *points) {
+      JsonObject item = pointArray.add<JsonObject>();
       item["weightGrams"] = point.weightGrams;
       item["liftVolts"] = point.liftVolts;
       item["dragVolts"] = point.dragVolts;
@@ -713,8 +875,10 @@ void handleSaveCalibration(AsyncWebServerRequest *request, uint8_t *body,
   const float startWeight = document["startWeightGrams"] | NAN;
   const float endWeight = document["endWeightGrams"] | NAN;
   const float increment = document["incrementGrams"] | NAN;
+  const String object = document["object"] | "";
   JsonArrayConst entries = document["points"].as<JsonArrayConst>();
-  if (!isfinite(startWeight) || !isfinite(endWeight) ||
+  if (!validCalibrationObject(object) ||
+      !isfinite(startWeight) || !isfinite(endWeight) ||
       !isfinite(increment) || startWeight >= endWeight || increment <= 0.0f ||
       startWeight > 0.0f || endWeight < 0.0f || entries.isNull()) {
     sendError(request, 400,
@@ -773,7 +937,14 @@ void handleSaveCalibration(AsyncWebServerRequest *request, uint8_t *body,
     sendError(request, 409, "Create or select a team before calibrating");
     return;
   }
-  updated->calibration = points;
+  std::vector<CalibrationPoint> *objectCalibration =
+      calibrationForObject(*updated, object);
+  if (objectCalibration == nullptr) {
+    unlockState();
+    sendError(request, 400, "Select a supported test object");
+    return;
+  }
+  *objectCalibration = points;
   if (!writeStationData(updatedTeams, currentTeam)) {
     unlockState();
     sendError(request, 500, "Could not save calibration data to ESP32 storage");
@@ -785,6 +956,7 @@ void handleSaveCalibration(AsyncWebServerRequest *request, uint8_t *body,
 
   JsonDocument response;
   response["team"] = savedTeam;
+  response["object"] = object;
   response["calibrationLoaded"] = true;
   response["pointCount"] = points.size();
   sendJson(request, 200, response);
@@ -801,7 +973,9 @@ void handleTeams(AsyncWebServerRequest *request) {
   for (const TeamRecord &team : teams) {
     JsonObject item = teamArray.add<JsonObject>();
     item["name"] = team.name;
-    item["calibrationLoaded"] = validCalibration(team.calibration);
+    item["calibrationLoaded"] =
+        validCalibration(team.calibration4424) ||
+        validCalibration(team.calibration6412);
   }
   unlockState();
   sendJson(request, 200, response);
@@ -851,7 +1025,7 @@ void handleCreateTeam(AsyncWebServerRequest *request, uint8_t *body,
     return;
   }
   std::vector<TeamRecord> updatedTeams = teams;
-  updatedTeams.push_back({name, {}});
+  updatedTeams.push_back({name, {}, {}});
   if (!writeStationData(updatedTeams, name)) {
     unlockState();
     sendError(request, 500, "Could not save team data to ESP32 storage");
@@ -904,10 +1078,18 @@ void handleSelectTeam(AsyncWebServerRequest *request, uint8_t *body,
 }
 
 void handleStatus(AsyncWebServerRequest *request) {
+  const String requestedObject =
+      request->hasParam("object") ? request->getParam("object")->value()
+                                 : "NACA 4424";
+  if (!validCalibrationObject(requestedObject)) {
+    sendError(request, 400, "Select a supported test object");
+    return;
+  }
   bool running = false;
   bool stable = false;
   TestSettings current;
   String selectedTeam;
+  String selectedObject;
   bool teamCalibrationLoaded = false;
   if (!lockState()) {
     sendError(request, 503, "Test state is unavailable");
@@ -917,9 +1099,12 @@ void handleStatus(AsyncWebServerRequest *request) {
   current = settings;
   stable = steadyStateAchieved;
   selectedTeam = currentTeam;
+  selectedObject = running ? current.airfoil : requestedObject;
   const TeamRecord *team = findTeam(currentTeam);
+  const std::vector<CalibrationPoint> *points =
+      team != nullptr ? calibrationForObject(*team, selectedObject) : nullptr;
   teamCalibrationLoaded =
-      team != nullptr && validCalibration(team->calibration);
+      points != nullptr && validCalibration(*points);
   unlockState();
 
   JsonDocument response;
@@ -944,7 +1129,7 @@ void handleStatus(AsyncWebServerRequest *request) {
   response["steadyState"] = running && stable;
   response["sampleRate"] = current.sampleRateHz;
   response["team"] = running ? current.team : selectedTeam;
-  response["object"] = current.airfoil;
+  response["object"] = selectedObject;
   response["units"] = current.units;
   addTunnelStatus(response);
   response["running"] = running;
@@ -1122,11 +1307,15 @@ void updateWebServer() {
     lastSampleAt = millis();
     const TeamRecord *team = findTeam(settings.team);
     const float lift =
-        team != nullptr ? calibratedForceNewtons(team, values.liftVolts, true)
-                        : NAN;
+        team != nullptr
+            ? calibratedForceNewtons(team, settings.airfoil, values.liftVolts,
+                                     true)
+            : NAN;
     const float drag =
-        team != nullptr ? calibratedForceNewtons(team, values.dragVolts, false)
-                        : NAN;
+        team != nullptr
+            ? calibratedForceNewtons(team, settings.airfoil, values.dragVolts,
+                                     false)
+            : NAN;
     const bool calibrated = isfinite(lift) && isfinite(drag);
     if (calibrated) {
       updateSteadyState(lift, drag, settings, millis());
