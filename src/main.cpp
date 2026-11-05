@@ -18,5 +18,5 @@ void loop() {
   updateMeasurements();
   updateWindTunnelControl();
   updateWebServer();
-  delay(1);
+  delay(0);
 }

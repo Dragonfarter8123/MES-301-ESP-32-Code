@@ -65,6 +65,7 @@ void conversionTimedOut() {
 
 bool initializeLoadCellInputs() {
   Wire.begin(Config::I2cSdaPin, Config::I2cSclPin);
+  Wire.setClock(400000);
   lastBeginAttemptAt = millis();
   if (!ads.begin(Config::AdsAddress, &Wire)) {
     setAdsConnected(false);
@@ -94,7 +95,8 @@ void updateLoadCellInputs() {
 
   const uint32_t now = millis();
   if (conversionState == ConversionState::WaitingToStart) {
-    if (now - lastPairCompletedAt >= Config::InputSamplingIntervalMs) {
+    if (Config::InputSamplingIntervalMs == 0 ||
+        now - lastPairCompletedAt >= Config::InputSamplingIntervalMs) {
       startConversion(liftMux(), ConversionState::WaitingForLift);
     }
     return;

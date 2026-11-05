@@ -9,10 +9,9 @@ are read as differential ADS1115 channels by default.
 - `src/main.cpp` calls the input, processing, and server modules.
 - `src/ESP10_Inputs.cpp` uses Adafruit_ADS1X15 and asynchronous conversion
   polling with a timeout.
-- `src/Calculations.cpp` filters each input independently. Force stays
-  unavailable until valid coefficients are supplied.
-- `src/WebServer.cpp` provides the Wi-Fi, SPIFFS, JSON, test-control, and CSV
-  endpoints.
+- `src/Calculations.cpp` filters each input independently.
+- `src/WebServer.cpp` provides the Wi-Fi, SPIFFS, JSON, test-control,
+  team/calibration persistence, and CSV endpoints.
 - `src/WindTunnelControl.cpp` interpolates the supplied speed/RPM and
   RPM/voltage measurements and controls the DFR0971 GP8403 DAC on its
   separate I2C bus.
@@ -43,32 +42,72 @@ Common-mode voltage also matters. The AD623 supply rails, gain, reference, and
 output range were not provided, so compatibility cannot be confirmed from
 software; verify the amplifier output with a meter before connection.
 
-Calibration coefficients are intentionally unset. After calibrating each
-sensor with known loads, set `CalibrationConfigured`, tare counts, and
-Newtons-per-count in `Config.h`. Both scales must be finite and nonzero or
-force output remains unavailable. The dashboard calibration action reports
-that calibration data is missing; it does not invent or save calibration
-values.
+Create teams in the dashboard; team names and the selected team are saved in
+SPIFFS (`/station.json`) and survive restart or power loss. Calibration is
+stored independently for each team. Enter a known weight range that brackets
+zero and the lift/drag output voltages for each weight. Voltage values must be
+strictly monotonic for each sensor. The firmware interpolates between adjacent
+calibration points (rather than assuming a single linear scale), estimates the
+zero-load voltage from the curve, and converts the balanced result from grams
+to Newtons. Readings outside the calibrated voltage range are unavailable
+rather than extrapolated. Calibration only describes the data supplied by the
+operator; validate the sensor, loads, and units physically.
+Generated calibration weights are editable row by row before saving; the
+weights must remain increasing and include zero.
+Uploading a replacement SPIFFS filesystem image can erase locally stored
+teams and calibration records; preserve those values before using `uploadfs`.
+
+## Acquisition filtering and steady-state detection
+
+The ADS1115 is configured for its 860 samples/second conversion rate, and the
+firmware no longer inserts a 20 ms pause between channel pairs. Because the
+ADS1115 converts one mux input at a time, reading both lift and drag
+sequentially shares that conversion budget (about 430 conversions/second per
+channel at the chip's nominal maximum, before firmware and I2C overhead).
+Actual throughput should be measured on the installed hardware.
+
+Each channel uses a sliding 64-sample DFT low-pass reconstruction that keeps
+DC and the first non-DC frequency bin, suppressing higher-frequency content
+before calibration and test logging. With two channels this bin is about
+6.7 Hz at the nominal per-channel rate; its effective cutoff depends on
+actual ADC throughput. The user-configured test logging rate (up to 50 Hz)
+is separate from the ADC conversion rate.
+
+For each test speed, steady state is reached when both calibrated force
+readings remain within the configured absolute error (Newtons) of their
+moving averages for the configured continuous hold duration. The moving
+average window and error tolerance are user-configurable. The sweep advances
+on steady state or when the maximum time at that speed expires; a timeout
+does not claim stability. Calibration is required for this force-based
+criterion.
 
 ## Wind-tunnel control and DFR0971 DAC
 
-The dashboard's existing speed slider requests a target in the configured
-20–40 mph range, with 0.5 mph steps. **Apply Speed** calculates the estimated
-RPM and voltage without sending a DAC command. Start Test runs the test and
-simulation timer; Stop Test stops both. The default is simulation mode:
+The dashboard accepts typed start speeds from 4–40 mph, end speeds from
+20–40 mph, and an increment in 0.5 mph steps. Start speeds below the first
+measured airspeed point use linear extrapolation from the first two
+airspeed/RPM points; RPM-to-voltage remains limited to its measured range.
+Each speed is held
+until steady state is reached or its configured maximum wait expires. The
+final speed is held for the same condition. The whole sweep is limited to one
+hour. **Apply Speed**
+calculates the estimated RPM and voltage without sending a DAC command. Start
+Test runs the sweep; Stop Test stops it. The default is simulation mode:
 `TunnelHardwareControlEnabled`, `TunnelSafetyPrerequisitesVerified`,
 `TunnelSafeStopVerified`, and `DacBenchTestEnabled` are all false. In this
 mode no DAC command is sent and no physical wind-tunnel control is possible.
-Actual speed remains unknown, and steady state is never claimed.
+Displayed windspeed is estimated using the tunnel's calibrated
+windspeed-to-fan-speed interpolation (reported fit `R² = 1`). In simulation
+mode this is the requested calibrated setpoint, not a physical output reading.
 
 Interpolation uses the airspeed/RPM and RPM/control-voltage measurements
-provided in the project request. It does not extrapolate. Therefore not every
-speed in the configured range is currently calculable: the first airspeed
-reference is 20.54 mph. The last reference point, 39.98 mph, maps to 3209 RPM,
-above the voltage table's 3183 RPM maximum, so 40 mph is also unavailable.
-For example, 30 mph calculates to approximately 2415 RPM and 6.85 V; 20 mph
-and 40 mph are rejected pending additional measurements.
-`MinTunnelSpeedMph`, `MaxTunnelSpeedMph`, `TunnelSpeedStepMph`, and
+provided in the project request. The 4 mph lower limit keeps the extrapolated
+RPM within the measured RPM-to-voltage range. The last airspeed reference,
+39.98 mph, maps to 3209 RPM, above the voltage table's 3183 RPM maximum, so
+40 mph remains unavailable pending additional measurements. For example,
+30 mph calculates to approximately 2415 RPM and 6.85 V.
+`MinTunnelSpeedMph`, `MinTunnelEndSpeedMph`, `MaxTunnelSpeedMph`,
+`TunnelSpeedStepMph`, and
 `TunnelStabilizationPeriodMs` are in `include/Config.h`. The stabilization
 timer is not evidence that the tunnel reached the requested speed.
 
@@ -120,6 +159,12 @@ exposes the endpoint/UI when enabled. It cannot be used concurrently with
 hardware tunnel mode, and a normal tunnel test is blocked until bench mode is
 returned to 0 V and stopped.
 
+Team API: `GET /api/teams`, `POST /api/teams` with `{"name":"Team name"}`,
+and `POST /api/team/select` with `{"name":"Team name"}`. Calibration status is
+available from `GET /api/calibration`; save a calibration with a JSON body
+containing `startWeightGrams`, `endWeightGrams`, `incrementGrams`, and a
+`points` array of `{weightGrams,liftVolts,dragVolts}` values.
+
 Tunnel API: `POST /api/tunnel/set-speed` with
 `{"targetSpeedMph":30}`, `POST /api/tunnel/start`, `POST /api/tunnel/stop`,
 `GET /api/tunnel/status`, and the config-gated bench routes
@@ -141,16 +186,19 @@ pio device monitor
 
 Upload the filesystem after changing `data/index.html`. The serial monitor
 runs at 115200 baud. With Wi-Fi credentials configured, open the printed ESP32
-IP address in a browser. Use **Start Test** and **Stop Test** from the shared
-header on any dashboard page. Test settings are applied when the test starts;
-choose a team (1–5), enter a duration from 1–60 seconds and a logging rate
-from 1–50 Hz, or select one of the provided presets. The measurements graph
-shows filtered output voltage in millivolts. CSV contains only samples
-collected during a test.
+IP address in a browser. Use **Start Test** and **Stop Test** from the shared header on any dashboard
+page. Test settings are applied when the test starts. Live measurements are
+pushed over a persistent WebSocket connection. The ESP32 batches up to ten
+samples or 250 ms of readings into each message, whichever comes first, and
+the dashboard redraws the graph once per batch. If a client cannot accept a
+batch, it is discarded rather than queued behind stale measurements. The
+measurements graph shows filtered output voltage in millivolts and stays
+visible until another test is started. CSV contains samples collected during
+the current or most recently completed test.
 
-API: `GET /`, `GET /api/status`, `GET /api/data`, `POST /api/start`,
-`POST /api/stop`, `POST /api/calibration`, and `GET /api/export.csv`, plus the
-tunnel endpoints listed above.
+API: `GET /`, `GET /api/status`, WebSocket `/api/ws`, `POST /api/start`,
+`POST /api/stop`, `GET /api/calibration`, `POST /api/calibration`,
+`GET /api/export.csv`, plus the team and tunnel endpoints listed above.
 
 ## Software verification
 
@@ -160,6 +208,6 @@ tunnel endpoints listed above.
   measurements; 20 mph is below the first airspeed point, and the 39.98 mph
   reference exceeds the voltage table's RPM range, so 20 and 40 correctly
   require more calibration data.
-- DFR0971 output voltage, DAC wiring, H-6910 operation, actual wind speed, and
-  steady-state feedback require physical hardware verification; none were
-  tested. DAC bench mode and wind-tunnel hardware mode remain disabled.
+- DFR0971 output voltage, DAC wiring, H-6910 operation, and steady-state
+  behavior require physical hardware verification; none were tested. DAC
+  bench mode and wind-tunnel hardware mode remain disabled.

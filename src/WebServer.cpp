@@ -18,16 +18,34 @@
 
 namespace {
 struct TestSettings {
+  float startSpeedMph = 25.0f;
+  float endSpeedMph = 25.0f;
+  float speedIncrementMph = 0.5f;
   float setpointMph = 25.0f;
-  uint32_t durationSeconds = 30;
+  uint32_t stabilizationSeconds = 10;
+  float steadyStateErrorNewtons = 0.05f;
+  uint16_t movingAverageWindowMs = 1000;
+  uint32_t steadyStateHoldSeconds = 2;
   uint16_t sampleRateHz = 20;
-  String team = "Team 1";
+  String team;
   String airfoil = "NACA 4424";
   String units = "N";
 };
 
+struct CalibrationPoint {
+  float weightGrams;
+  float liftVolts;
+  float dragVolts;
+};
+
+struct TeamRecord {
+  String name;
+  std::vector<CalibrationPoint> calibration;
+};
+
 struct TestSample {
   uint32_t elapsedMs;
+  float setpointMph;
   float liftRaw;
   float dragRaw;
   float liftVolts;
@@ -41,21 +59,278 @@ struct CsvStreamState {
   std::vector<TestSample> samples;
   String pending;
   size_t nextSample = 0;
-  float setpointMph = 25.0f;
 };
 
+constexpr size_t MaxTeams = 20;
+constexpr size_t MaxTeamNameLength = 32;
+constexpr size_t MaxCalibrationPoints = 51;
+constexpr size_t MaxMovingAverageSamples = 500;
+constexpr char StationDataPath[] = "/station.json";
+
 AsyncWebServer server(80);
+AsyncWebSocket measurementSocket("/api/ws");
 SemaphoreHandle_t stateMutex = nullptr;
 TestSettings settings;
+std::vector<TeamRecord> teams;
+String currentTeam;
 std::vector<TestSample> testSamples;
 bool testRunning = false;
 uint32_t testStartedAt = 0;
+uint32_t speedStepStartedAt = 0;
 uint32_t lastSampleAt = 0;
 uint32_t lastLoggedSequence = 0;
 uint32_t testStartSequence = 0;
 uint32_t lastWifiAttemptAt = 0;
 bool wifiAddressPrinted = false;
 bool spiffsMounted = false;
+String pendingMeasurementBatch;
+uint8_t pendingMeasurementCount = 0;
+uint32_t measurementBatchStartedAt = 0;
+float liftStabilityValues[MaxMovingAverageSamples] = {};
+float dragStabilityValues[MaxMovingAverageSamples] = {};
+size_t stabilityNext = 0;
+size_t stabilityCount = 0;
+float liftStabilitySum = 0.0f;
+float dragStabilitySum = 0.0f;
+uint32_t steadyStateStartedAt = 0;
+bool steadyStateTimerRunning = false;
+bool steadyStateAchieved = false;
+constexpr uint8_t MaxMeasurementBatchSize = 10;
+constexpr uint32_t MeasurementBatchIntervalMs = 250;
+
+void resetSteadyStateTracking() {
+  memset(liftStabilityValues, 0, sizeof(liftStabilityValues));
+  memset(dragStabilityValues, 0, sizeof(dragStabilityValues));
+  stabilityNext = 0;
+  stabilityCount = 0;
+  liftStabilitySum = 0.0f;
+  dragStabilitySum = 0.0f;
+  steadyStateStartedAt = 0;
+  steadyStateTimerRunning = false;
+  steadyStateAchieved = false;
+}
+
+bool updateSteadyState(float lift, float drag, const TestSettings &current,
+                       uint32_t now) {
+  const size_t windowSamples = min(
+      MaxMovingAverageSamples,
+      max(static_cast<size_t>(1),
+          (static_cast<size_t>(current.movingAverageWindowMs) *
+               current.sampleRateHz +
+           999) /
+              1000));
+  if (stabilityCount == windowSamples) {
+    liftStabilitySum -= liftStabilityValues[stabilityNext];
+    dragStabilitySum -= dragStabilityValues[stabilityNext];
+  } else {
+    ++stabilityCount;
+  }
+  liftStabilityValues[stabilityNext] = lift;
+  dragStabilityValues[stabilityNext] = drag;
+  liftStabilitySum += lift;
+  dragStabilitySum += drag;
+  stabilityNext = (stabilityNext + 1) % windowSamples;
+
+  if (stabilityCount < windowSamples) {
+    steadyStateTimerRunning = false;
+    return false;
+  }
+  const float liftAverage = liftStabilitySum / stabilityCount;
+  const float dragAverage = dragStabilitySum / stabilityCount;
+  const bool withinError =
+      fabsf(lift - liftAverage) <= current.steadyStateErrorNewtons &&
+      fabsf(drag - dragAverage) <= current.steadyStateErrorNewtons;
+  if (!withinError) {
+    steadyStateTimerRunning = false;
+    steadyStateStartedAt = 0;
+    steadyStateAchieved = false;
+    return false;
+  }
+  if (!steadyStateTimerRunning) {
+    steadyStateTimerRunning = true;
+    steadyStateStartedAt = now;
+  }
+  steadyStateAchieved =
+      now - steadyStateStartedAt >= current.steadyStateHoldSeconds * 1000U;
+  return steadyStateAchieved;
+}
+
+TeamRecord *findTeam(const String &name) {
+  for (TeamRecord &team : teams) {
+    if (team.name == name) return &team;
+  }
+  return nullptr;
+}
+
+bool validCalibration(const std::vector<CalibrationPoint> &points) {
+  if (points.size() < 2 || points.size() > MaxCalibrationPoints ||
+      points.front().weightGrams > 0.0f ||
+      points.back().weightGrams < 0.0f) {
+    return false;
+  }
+  bool liftIncreasing = points[1].liftVolts > points[0].liftVolts;
+  bool dragIncreasing = points[1].dragVolts > points[0].dragVolts;
+  for (size_t i = 0; i < points.size(); ++i) {
+    const CalibrationPoint &point = points[i];
+    if (!isfinite(point.weightGrams) || !isfinite(point.liftVolts) ||
+        !isfinite(point.dragVolts) || fabsf(point.liftVolts) > 10.0f ||
+        fabsf(point.dragVolts) > 10.0f) {
+      return false;
+    }
+    if (i > 0 &&
+        (point.weightGrams <= points[i - 1].weightGrams ||
+         (liftIncreasing ? point.liftVolts <= points[i - 1].liftVolts
+                         : point.liftVolts >= points[i - 1].liftVolts) ||
+         (dragIncreasing ? point.dragVolts <= points[i - 1].dragVolts
+                         : point.dragVolts >= points[i - 1].dragVolts))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool writeStationData(const std::vector<TeamRecord> &records,
+                      const String &selectedTeam) {
+  JsonDocument document;
+  document["currentTeam"] = selectedTeam;
+  JsonArray teamArray = document["teams"].to<JsonArray>();
+  for (const TeamRecord &team : records) {
+    JsonObject item = teamArray.add<JsonObject>();
+    item["name"] = team.name;
+    JsonArray points = item["calibration"].to<JsonArray>();
+    for (const CalibrationPoint &point : team.calibration) {
+      JsonObject entry = points.add<JsonObject>();
+      entry["weightGrams"] = point.weightGrams;
+      entry["liftVolts"] = point.liftVolts;
+      entry["dragVolts"] = point.dragVolts;
+    }
+  }
+
+  File file = SPIFFS.open("/station.tmp", FILE_WRITE);
+  if (!file) return false;
+  const size_t expected = measureJson(document);
+  const size_t written = serializeJson(document, file);
+  file.close();
+  if (written != expected) {
+    SPIFFS.remove("/station.tmp");
+    return false;
+  }
+  const bool hadPrevious = SPIFFS.exists(StationDataPath);
+  if (SPIFFS.exists("/station.bak")) {
+    SPIFFS.remove("/station.bak");
+  }
+  if (hadPrevious && !SPIFFS.rename(StationDataPath, "/station.bak")) {
+    SPIFFS.remove("/station.tmp");
+    return false;
+  }
+  if (!SPIFFS.rename("/station.tmp", StationDataPath)) {
+    if (hadPrevious) SPIFFS.rename("/station.bak", StationDataPath);
+    SPIFFS.remove("/station.tmp");
+    return false;
+  }
+  if (SPIFFS.exists("/station.bak")) {
+    SPIFFS.remove("/station.bak");
+  }
+  return true;
+}
+
+void loadStationData() {
+  if (!SPIFFS.exists(StationDataPath) && SPIFFS.exists("/station.bak")) {
+    SPIFFS.rename("/station.bak", StationDataPath);
+  }
+  if (!SPIFFS.exists(StationDataPath)) return;
+  File file = SPIFFS.open(StationDataPath, FILE_READ);
+  if (!file) {
+    Serial.println("ERROR: Could not read team/calibration data from SPIFFS.");
+    return;
+  }
+  JsonDocument document;
+  const DeserializationError error = deserializeJson(document, file);
+  file.close();
+  if (error || !document["teams"].is<JsonArray>()) {
+    Serial.println("ERROR: Team/calibration data is invalid; ignoring it.");
+    return;
+  }
+
+  std::vector<TeamRecord> loaded;
+  for (JsonObjectConst item : document["teams"].as<JsonArrayConst>()) {
+    const char *name = item["name"] | "";
+    if (name[0] == '\0' || strlen(name) > MaxTeamNameLength ||
+        loaded.size() >= MaxTeams) {
+      continue;
+    }
+    TeamRecord team;
+    team.name = name;
+    for (JsonObjectConst point : item["calibration"].as<JsonArrayConst>()) {
+      team.calibration.push_back(
+          {point["weightGrams"] | NAN, point["liftVolts"] | NAN,
+           point["dragVolts"] | NAN});
+    }
+    if (!team.calibration.empty() && !validCalibration(team.calibration)) {
+      team.calibration.clear();
+      Serial.println("ERROR: Invalid saved calibration ignored for a team.");
+    }
+    loaded.push_back(team);
+  }
+  teams = loaded;
+  const char *selected = document["currentTeam"] | "";
+  if (findTeam(String(selected)) != nullptr) currentTeam = selected;
+}
+
+float interpolateWeightAtVoltage(const std::vector<CalibrationPoint> &points,
+                                 float voltage, bool lift) {
+  if (!isfinite(voltage)) return NAN;
+
+  const float firstVoltage =
+      lift ? points.front().liftVolts : points.front().dragVolts;
+  const float lastVoltage =
+      lift ? points.back().liftVolts : points.back().dragVolts;
+  if (voltage < min(firstVoltage, lastVoltage) ||
+      voltage > max(firstVoltage, lastVoltage)) {
+    return NAN;
+  }
+
+  for (size_t i = 1; i < points.size(); ++i) {
+    const float lower = lift ? points[i - 1].liftVolts : points[i - 1].dragVolts;
+    const float upper = lift ? points[i].liftVolts : points[i].dragVolts;
+    if ((voltage >= min(lower, upper)) && (voltage <= max(lower, upper))) {
+      const float fraction = (voltage - lower) / (upper - lower);
+      return points[i - 1].weightGrams +
+             fraction * (points[i].weightGrams -
+                         points[i - 1].weightGrams);
+    }
+  }
+  return NAN;
+}
+
+float interpolateZeroVoltage(const std::vector<CalibrationPoint> &points,
+                             bool lift) {
+  const float firstWeight = points.front().weightGrams;
+  size_t segment = 1;
+  while (segment < points.size() - 1 && points[segment].weightGrams < 0.0f) {
+    ++segment;
+  }
+  if (firstWeight > 0.0f) segment = 1;
+  else if (points.back().weightGrams < 0.0f) segment = points.size() - 1;
+
+  const CalibrationPoint &a = points[segment - 1];
+  const CalibrationPoint &b = points[segment];
+  const float aVoltage = lift ? a.liftVolts : a.dragVolts;
+  const float bVoltage = lift ? b.liftVolts : b.dragVolts;
+  const float fraction = -a.weightGrams / (b.weightGrams - a.weightGrams);
+  return aVoltage + fraction * (bVoltage - aVoltage);
+}
+
+float calibratedForceNewtons(const TeamRecord *team, float voltage,
+                             bool lift) {
+  if (team == nullptr || !validCalibration(team->calibration)) return NAN;
+  const float grams = interpolateWeightAtVoltage(team->calibration, voltage, lift);
+  const float zeroVoltage = interpolateZeroVoltage(team->calibration, lift);
+  const float zeroGrams =
+      interpolateWeightAtVoltage(team->calibration, zeroVoltage, lift);
+  if (!isfinite(grams) || !isfinite(zeroGrams)) return NAN;
+  return (grams - zeroGrams) * 0.00980665f;
+}
 
 bool lockState() {
   return stateMutex != nullptr &&
@@ -89,6 +364,7 @@ void addTunnelStatus(JsonDocument &response) {
   response["dacBenchTestEnabled"] =
       Config::DacBenchTestEnabled && !Config::TunnelHardwareControlEnabled;
   response["targetSpeedMph"] = status.targetSpeedMph;
+  response["calibratedSpeedMph"] = status.targetSpeedMph;
   if (status.calculationAvailable) {
     response["estimatedFanRPM"] = status.estimatedFanRpm;
     response["calculatedVoltage"] = status.calculatedVoltage;
@@ -106,7 +382,6 @@ void addTunnelStatus(JsonDocument &response) {
   response["commandAccepted"] = status.commandAccepted;
   response["outputVoltageVerified"] = status.outputVoltageVerified;
   response["benchTestActive"] = status.benchTestActive;
-  response["actualSpeedMph"] = nullptr;
   response["running"] = status.running;
   response["tunnelRunning"] = status.running;
   response["stabilizationElapsedMs"] = status.stabilizationElapsedMs;
@@ -125,26 +400,42 @@ void addTunnelStatus(JsonDocument &response) {
   }
   response["message"] = status.outputEnabled
                             ? "DAC command issued; physical output voltage has not been measured."
-                            : "No physical wind-tunnel command is active. Actual wind speed is unknown.";
+                            : "No physical wind-tunnel command is active; windspeed is shown as the calibrated estimate.";
 }
 
 bool validStartSettings(JsonDocument &document, TestSettings &result) {
   const char *team = document["team"] | "";
   const char *airfoil = document["object"] | "";
   const char *units = document["units"] | "N";
-  const float setpoint = document["speed"] | 25.0f;
-  const float durationInput = document["duration"] | 0.0f;
+  const float startSpeed = document["startSpeed"] | -1.0f;
+  const float endSpeed = document["endSpeed"] | -1.0f;
+  const float speedIncrement = document["speedIncrement"] | -1.0f;
+  const float stabilizationInput = document["stabilizationSeconds"] | 0.0f;
+  const float steadyErrorInput = document["steadyStateErrorNewtons"] | NAN;
+  const float movingAverageWindowInput =
+      document["movingAverageWindowMs"] | NAN;
+  const float steadyStateHoldInput =
+      document["steadyStateHoldSeconds"] | NAN;
   const float sampleRateInput = document["sampleRate"] | 0.0f;
 
-  if (!isfinite(setpoint) || setpoint < Config::MinTunnelSpeedMph ||
-      setpoint > Config::MaxTunnelSpeedMph ||
-      fabsf(setpoint / Config::TunnelSpeedStepMph -
-            roundf(setpoint / Config::TunnelSpeedStepMph)) > 0.001f) {
+  if (team[0] == '\0' || strlen(team) > MaxTeamNameLength ||
+      !isfinite(startSpeed) || !isfinite(endSpeed) ||
+      !isfinite(speedIncrement) || startSpeed < Config::MinTunnelSpeedMph ||
+      startSpeed > Config::MaxTunnelSpeedMph ||
+      endSpeed < Config::MinTunnelEndSpeedMph ||
+      endSpeed > Config::MaxTunnelSpeedMph || speedIncrement <= 0.0f ||
+      fabsf(startSpeed / Config::TunnelSpeedStepMph -
+            roundf(startSpeed / Config::TunnelSpeedStepMph)) > 0.001f ||
+      fabsf(endSpeed / Config::TunnelSpeedStepMph -
+            roundf(endSpeed / Config::TunnelSpeedStepMph)) > 0.001f ||
+      fabsf(speedIncrement / Config::TunnelSpeedStepMph -
+            roundf(speedIncrement / Config::TunnelSpeedStepMph)) > 0.001f) {
     return false;
   }
-  if (strcmp(team, "Team 1") != 0 && strcmp(team, "Team 2") != 0 &&
-      strcmp(team, "Team 3") != 0 && strcmp(team, "Team 4") != 0 &&
-      strcmp(team, "Team 5") != 0) {
+  const float span = fabsf(endSpeed - startSpeed);
+  const float stepCount = span / speedIncrement;
+  if (stepCount > 40.0f ||
+      fabsf(stepCount - roundf(stepCount)) > 0.001f) {
     return false;
   }
   if (strcmp(airfoil, "NACA 4424") != 0 &&
@@ -155,21 +446,40 @@ bool validStartSettings(JsonDocument &document, TestSettings &result) {
       strcmp(units, "g") != 0) {
     return false;
   }
-  if (!isfinite(durationInput) || durationInput < 1.0f ||
-      durationInput > Config::MaxTestDurationSeconds ||
-      floorf(durationInput) != durationInput) {
+  if (!isfinite(stabilizationInput) || stabilizationInput < 1.0f ||
+      stabilizationInput > Config::MaxTestDurationSeconds ||
+      floorf(stabilizationInput) != stabilizationInput ||
+      (roundf(stepCount) + 1.0f) * stabilizationInput >
+          Config::MaxTestDurationSeconds) {
     return false;
   }
-  const float maxSampleRateHz =
-      1000.0f / Config::InputSamplingIntervalMs;
+  if (!isfinite(steadyErrorInput) || steadyErrorInput <= 0.0f ||
+      steadyErrorInput > 100.0f ||
+      !isfinite(movingAverageWindowInput) ||
+      movingAverageWindowInput < 100.0f ||
+      movingAverageWindowInput > 10000.0f ||
+      floorf(movingAverageWindowInput) != movingAverageWindowInput ||
+      !isfinite(steadyStateHoldInput) || steadyStateHoldInput < 1.0f ||
+      steadyStateHoldInput > stabilizationInput ||
+      floorf(steadyStateHoldInput) != steadyStateHoldInput) {
+    return false;
+  }
   if (!isfinite(sampleRateInput) || sampleRateInput < 1.0f ||
-      sampleRateInput > maxSampleRateHz ||
+      sampleRateInput > Config::MaxLoggingSampleRateHz ||
       floorf(sampleRateInput) != sampleRateInput) {
     return false;
   }
 
-  result.setpointMph = setpoint;
-  result.durationSeconds = static_cast<uint32_t>(durationInput);
+  result.startSpeedMph = startSpeed;
+  result.endSpeedMph = endSpeed;
+  result.speedIncrementMph = speedIncrement;
+  result.setpointMph = startSpeed;
+  result.stabilizationSeconds = static_cast<uint32_t>(stabilizationInput);
+  result.steadyStateErrorNewtons = steadyErrorInput;
+  result.movingAverageWindowMs =
+      static_cast<uint16_t>(movingAverageWindowInput);
+  result.steadyStateHoldSeconds =
+      static_cast<uint32_t>(steadyStateHoldInput);
   result.sampleRateHz = static_cast<uint16_t>(sampleRateInput);
   result.team = team;
   result.airfoil = airfoil;
@@ -208,6 +518,11 @@ void handleStart(AsyncWebServerRequest *request, uint8_t *body, size_t length,
     sendError(request, 409, "A test is already running");
     return;
   }
+  if (findTeam(requested.team) == nullptr || currentTeam != requested.team) {
+    unlockState();
+    sendError(request, 400, "Select an existing team before starting a test");
+    return;
+  }
 
   const char *controlError = nullptr;
   if (!setWindTunnelTargetSpeed(requested.setpointMph, &controlError) ||
@@ -221,8 +536,10 @@ void handleStart(AsyncWebServerRequest *request, uint8_t *body, size_t length,
 
   settings = requested;
   testSamples.clear();
+  resetSteadyStateTracking();
   testRunning = true;
   testStartedAt = millis();
+  speedStepStartedAt = testStartedAt;
   lastSampleAt = testStartedAt - (1000U / settings.sampleRateHz);
   testStartSequence = getMeasurementValues().sequence;
   lastLoggedSequence = testStartSequence;
@@ -230,7 +547,7 @@ void handleStart(AsyncWebServerRequest *request, uint8_t *body, size_t length,
 
   JsonDocument response;
   response["running"] = true;
-  response["durationSeconds"] = requested.durationSeconds;
+  response["stabilizationSeconds"] = requested.stabilizationSeconds;
   response["setpoint"] = requested.setpointMph;
   addTunnelStatus(response);
   sendJson(request, 200, response);
@@ -359,22 +676,250 @@ void handleTunnelStatus(AsyncWebServerRequest *request) {
 }
 
 void handleCalibration(AsyncWebServerRequest *request) {
+  if (!lockState()) {
+    sendError(request, 503, "Calibration state is unavailable");
+    return;
+  }
+  const TeamRecord *team = findTeam(currentTeam);
   JsonDocument response;
-  response["calibrationLoaded"] = isCalibrationLoaded();
-  response["error"] =
-      "No valid calibration values are configured; calibration was not changed.";
-  sendJson(request, 409, response);
+  response["team"] = currentTeam;
+  response["calibrationLoaded"] =
+      team != nullptr && validCalibration(team->calibration);
+  if (team != nullptr) {
+    JsonArray points = response["points"].to<JsonArray>();
+    for (const CalibrationPoint &point : team->calibration) {
+      JsonObject item = points.add<JsonObject>();
+      item["weightGrams"] = point.weightGrams;
+      item["liftVolts"] = point.liftVolts;
+      item["dragVolts"] = point.dragVolts;
+    }
+  }
+  unlockState();
+  sendJson(request, 200, response);
+}
+
+void handleSaveCalibration(AsyncWebServerRequest *request, uint8_t *body,
+                           size_t length, size_t index, size_t total) {
+  if (index != 0 || length != total || total > 8192) {
+    sendError(request, 400, "Invalid or oversized request body");
+    return;
+  }
+  JsonDocument document;
+  if (deserializeJson(document, body, length)) {
+    sendError(request, 400, "Request body must be valid JSON");
+    return;
+  }
+
+  const float startWeight = document["startWeightGrams"] | NAN;
+  const float endWeight = document["endWeightGrams"] | NAN;
+  const float increment = document["incrementGrams"] | NAN;
+  JsonArrayConst entries = document["points"].as<JsonArrayConst>();
+  if (!isfinite(startWeight) || !isfinite(endWeight) ||
+      !isfinite(increment) || startWeight >= endWeight || increment <= 0.0f ||
+      startWeight > 0.0f || endWeight < 0.0f || entries.isNull()) {
+    sendError(request, 400,
+              "Calibration weights must be valid and bracket zero weight");
+    return;
+  }
+  if (entries.size() < 2 || entries.size() > MaxCalibrationPoints) {
+    sendError(request, 400,
+              "Calibration table must contain 2 to 51 weight points");
+    return;
+  }
+
+  std::vector<CalibrationPoint> points;
+  points.reserve(entries.size());
+  for (JsonObjectConst entry : entries) {
+    const float weight = entry["weightGrams"] | NAN;
+    const float liftVolts = entry["liftVolts"] | NAN;
+    const float dragVolts = entry["dragVolts"] | NAN;
+    if (!isfinite(weight)) {
+      sendError(request, 400, "Calibration table weights must be finite");
+      return;
+    }
+    points.push_back({weight, liftVolts, dragVolts});
+  }
+  if (fabsf(points.front().weightGrams - startWeight) > 0.001f ||
+      fabsf(points.back().weightGrams - endWeight) > 0.001f) {
+    sendError(request, 400,
+              "Start and end weights must match the first and last table rows");
+    return;
+  }
+  if (!validCalibration(points)) {
+    sendError(request, 400,
+              "Voltages must be finite and strictly monotonic for each sensor");
+    return;
+  }
+
+  if (!lockState()) {
+    sendError(request, 503, "Calibration state is unavailable");
+    return;
+  }
+  if (testRunning) {
+    unlockState();
+    sendError(request, 409, "Stop the test before changing calibration");
+    return;
+  }
+  std::vector<TeamRecord> updatedTeams = teams;
+  TeamRecord *updated = nullptr;
+  for (TeamRecord &team : updatedTeams) {
+    if (team.name == currentTeam) {
+      updated = &team;
+      break;
+    }
+  }
+  if (updated == nullptr) {
+    unlockState();
+    sendError(request, 409, "Create or select a team before calibrating");
+    return;
+  }
+  updated->calibration = points;
+  if (!writeStationData(updatedTeams, currentTeam)) {
+    unlockState();
+    sendError(request, 500, "Could not save calibration data to ESP32 storage");
+    return;
+  }
+  teams = updatedTeams;
+  const String savedTeam = currentTeam;
+  unlockState();
+
+  JsonDocument response;
+  response["team"] = savedTeam;
+  response["calibrationLoaded"] = true;
+  response["pointCount"] = points.size();
+  sendJson(request, 200, response);
+}
+
+void handleTeams(AsyncWebServerRequest *request) {
+  if (!lockState()) {
+    sendError(request, 503, "Team data is unavailable");
+    return;
+  }
+  JsonDocument response;
+  response["currentTeam"] = currentTeam;
+  JsonArray teamArray = response["teams"].to<JsonArray>();
+  for (const TeamRecord &team : teams) {
+    JsonObject item = teamArray.add<JsonObject>();
+    item["name"] = team.name;
+    item["calibrationLoaded"] = validCalibration(team.calibration);
+  }
+  unlockState();
+  sendJson(request, 200, response);
+}
+
+void handleCreateTeam(AsyncWebServerRequest *request, uint8_t *body,
+                      size_t length, size_t index, size_t total) {
+  if (index != 0 || length != total || total > 1024) {
+    sendError(request, 400, "Invalid or oversized request body");
+    return;
+  }
+  JsonDocument document;
+  if (deserializeJson(document, body, length)) {
+    sendError(request, 400, "Request body must be valid JSON");
+    return;
+  }
+  const char *nameInput = document["name"] | "";
+  String name(nameInput);
+  name.trim();
+  if (name.isEmpty() || name.length() > MaxTeamNameLength) {
+    sendError(request, 400, "Team name must contain 1 to 32 characters");
+    return;
+  }
+  for (size_t i = 0; i < name.length(); ++i) {
+    if (static_cast<uint8_t>(name[i]) < 32) {
+      sendError(request, 400, "Team name contains an invalid character");
+      return;
+    }
+  }
+  if (!lockState()) {
+    sendError(request, 503, "Team data is unavailable");
+    return;
+  }
+  if (testRunning) {
+    unlockState();
+    sendError(request, 409, "Stop the test before creating a team");
+    return;
+  }
+  if (teams.size() >= MaxTeams) {
+    unlockState();
+    sendError(request, 409, "The ESP32 team storage limit has been reached");
+    return;
+  }
+  if (findTeam(name) != nullptr) {
+    unlockState();
+    sendError(request, 409, "A team with that name already exists");
+    return;
+  }
+  std::vector<TeamRecord> updatedTeams = teams;
+  updatedTeams.push_back({name, {}});
+  if (!writeStationData(updatedTeams, name)) {
+    unlockState();
+    sendError(request, 500, "Could not save team data to ESP32 storage");
+    return;
+  }
+  teams = updatedTeams;
+  currentTeam = name;
+  unlockState();
+  JsonDocument response;
+  response["currentTeam"] = name;
+  sendJson(request, 201, response);
+}
+
+void handleSelectTeam(AsyncWebServerRequest *request, uint8_t *body,
+                      size_t length, size_t index, size_t total) {
+  if (index != 0 || length != total || total > 1024) {
+    sendError(request, 400, "Invalid or oversized request body");
+    return;
+  }
+  JsonDocument document;
+  if (deserializeJson(document, body, length)) {
+    sendError(request, 400, "Request body must be valid JSON");
+    return;
+  }
+  const char *name = document["name"] | "";
+  if (!lockState()) {
+    sendError(request, 503, "Team data is unavailable");
+    return;
+  }
+  if (testRunning) {
+    unlockState();
+    sendError(request, 409, "Stop the test before changing teams");
+    return;
+  }
+  if (findTeam(String(name)) == nullptr) {
+    unlockState();
+    sendError(request, 404, "Team does not exist");
+    return;
+  }
+  if (!writeStationData(teams, String(name))) {
+    unlockState();
+    sendError(request, 500, "Could not save the selected team to ESP32 storage");
+    return;
+  }
+  currentTeam = name;
+  unlockState();
+  JsonDocument response;
+  response["currentTeam"] = name;
+  sendJson(request, 200, response);
 }
 
 void handleStatus(AsyncWebServerRequest *request) {
   bool running = false;
+  bool stable = false;
   TestSettings current;
+  String selectedTeam;
+  bool teamCalibrationLoaded = false;
   if (!lockState()) {
     sendError(request, 503, "Test state is unavailable");
     return;
   }
   running = testRunning;
   current = settings;
+  stable = steadyStateAchieved;
+  selectedTeam = currentTeam;
+  const TeamRecord *team = findTeam(currentTeam);
+  teamCalibrationLoaded =
+      team != nullptr && validCalibration(team->calibration);
   unlockState();
 
   JsonDocument response;
@@ -385,63 +930,24 @@ void handleStatus(AsyncWebServerRequest *request) {
   response["measurementsReady"] = isAdsConnected() && values.hasSample;
   response["running"] = running;
   response["tunnelStatus"] = running ? "Running" : "No active test";
-  response["calibrationLoaded"] = isCalibrationLoaded();
-  response["actualSpeed"] = nullptr;
-  response["speed"] = nullptr;
+  response["calibrationLoaded"] = teamCalibrationLoaded;
+  response["calibratedSpeedMph"] = current.setpointMph;
+  response["speed"] = current.setpointMph;
   response["setpoint"] = current.setpointMph;
-  response["durationSeconds"] = current.durationSeconds;
+  response["startSpeedMph"] = current.startSpeedMph;
+  response["endSpeedMph"] = current.endSpeedMph;
+  response["speedIncrementMph"] = current.speedIncrementMph;
+  response["stabilizationSeconds"] = current.stabilizationSeconds;
+  response["steadyStateErrorNewtons"] = current.steadyStateErrorNewtons;
+  response["movingAverageWindowMs"] = current.movingAverageWindowMs;
+  response["steadyStateHoldSeconds"] = current.steadyStateHoldSeconds;
+  response["steadyState"] = running && stable;
   response["sampleRate"] = current.sampleRateHz;
-  response["team"] = current.team;
+  response["team"] = running ? current.team : selectedTeam;
   response["object"] = current.airfoil;
   response["units"] = current.units;
   addTunnelStatus(response);
   response["running"] = running;
-  sendJson(request, 200, response);
-}
-
-void handleData(AsyncWebServerRequest *request) {
-  bool running = false;
-  float setpoint = 25.0f;
-  uint32_t firstSequence = 0;
-  if (!lockState()) {
-    sendError(request, 503, "Test state is unavailable");
-    return;
-  }
-  running = testRunning;
-  setpoint = settings.setpointMph;
-  firstSequence = testStartSequence;
-  unlockState();
-
-  const MeasurementValues values = getMeasurementValues();
-  JsonDocument response;
-  response["running"] = running;
-  response["adsAvailable"] = isAdsConnected();
-  response["setpoint"] = setpoint;
-  response["speed"] = nullptr;
-  response["steadyState"] = false;
-
-  if (running && isAdsConnected() && values.hasSample &&
-      values.sequence != firstSequence) {
-    response["liftRaw"] = values.liftRaw;
-    response["dragRaw"] = values.dragRaw;
-    response["liftVolts"] = values.liftVolts;
-    response["dragVolts"] = values.dragVolts;
-    response["sampleSequence"] = values.sequence;
-    if (values.calibrationLoaded) {
-      response["lift"] = values.liftNewtons;
-      response["drag"] = values.dragNewtons;
-    } else {
-      response["lift"] = nullptr;
-      response["drag"] = nullptr;
-    }
-  } else {
-    response["liftRaw"] = nullptr;
-    response["dragRaw"] = nullptr;
-    response["liftVolts"] = nullptr;
-    response["dragVolts"] = nullptr;
-    response["lift"] = nullptr;
-    response["drag"] = nullptr;
-  }
   sendJson(request, 200, response);
 }
 
@@ -453,7 +959,6 @@ void handleExport(AsyncWebServerRequest *request) {
     return;
   }
   stream->samples = testSamples;
-  stream->setpointMph = settings.setpointMph;
   unlockState();
 
   stream->pending =
@@ -482,7 +987,7 @@ void handleExport(AsyncWebServerRequest *request) {
             } else {
               stream->pending += ",,,false,,";
             }
-            stream->pending += String(stream->setpointMph, 1);
+            stream->pending += String(sample.setpointMph, 1);
             stream->pending += "\r\n";
           }
 
@@ -520,7 +1025,9 @@ void configureRoutes() {
     request->send(SPIFFS, "/index.html", "text/html");
   });
   server.on("/api/status", HTTP_GET, handleStatus);
-  server.on("/api/data", HTTP_GET, handleData);
+  measurementSocket.enable(true);
+  measurementSocket.cleanupClients();
+  server.addHandler(&measurementSocket);
   server.on("/api/start", HTTP_POST, [](AsyncWebServerRequest *) {}, nullptr,
             handleStart);
   server.on("/api/stop", HTTP_POST, handleStop);
@@ -532,7 +1039,14 @@ void configureRoutes() {
   server.on("/api/tunnel/bench-output", HTTP_POST, [](AsyncWebServerRequest *) {},
             nullptr, handleDacBenchOutput);
   server.on("/api/tunnel/bench-stop", HTTP_POST, handleDacBenchStop);
-  server.on("/api/calibration", HTTP_POST, handleCalibration);
+  server.on("/api/teams", HTTP_GET, handleTeams);
+  server.on("/api/teams", HTTP_POST, [](AsyncWebServerRequest *) {}, nullptr,
+            handleCreateTeam);
+  server.on("/api/team/select", HTTP_POST, [](AsyncWebServerRequest *) {},
+            nullptr, handleSelectTeam);
+  server.on("/api/calibration", HTTP_GET, handleCalibration);
+  server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest *) {},
+            nullptr, handleSaveCalibration);
   server.on("/api/export.csv", HTTP_GET, handleExport);
 }
 }  // namespace
@@ -547,6 +1061,8 @@ void initializeWebServer() {
   spiffsMounted = SPIFFS.begin(true);
   if (!spiffsMounted) {
     Serial.println("ERROR: SPIFFS could not be mounted.");
+  } else {
+    loadStationData();
   }
 
   beginWifi();
@@ -571,20 +1087,31 @@ void updateWebServer() {
   }
 
   const MeasurementValues values = getMeasurementValues();
+  bool stopTunnel = false;
+  const char *stopError = nullptr;
   if (!lockState()) {
     return;
   }
 
   if (testRunning &&
-      millis() - testStartedAt >= settings.durationSeconds * 1000U) {
-    testRunning = false;
-    unlockState();
-    const char *error = nullptr;
-    if (!stopWindTunnelControl(&error)) {
-      Serial.print("ERROR: Tunnel safe-stop failed: ");
-      Serial.println(error != nullptr ? error : "unknown error");
+      (steadyStateAchieved ||
+       millis() - speedStepStartedAt >= settings.stabilizationSeconds * 1000U)) {
+    const float direction =
+        settings.endSpeedMph >= settings.startSpeedMph ? 1.0f : -1.0f;
+    const float nextSpeed =
+        settings.setpointMph + direction * settings.speedIncrementMph;
+    const bool withinSweep =
+        direction > 0.0f ? nextSpeed <= settings.endSpeedMph + 0.001f
+                         : nextSpeed >= settings.endSpeedMph - 0.001f;
+    if (withinSweep &&
+        updateWindTunnelTargetSpeedDuringTest(nextSpeed, &stopError)) {
+      settings.setpointMph = nextSpeed;
+      speedStepStartedAt = millis();
+      resetSteadyStateTracking();
+    } else {
+      testRunning = false;
+      stopTunnel = true;
     }
-    return;
   }
 
   const uint32_t sampleInterval = 1000U / settings.sampleRateHz;
@@ -593,17 +1120,98 @@ void updateWebServer() {
       millis() - lastSampleAt >= sampleInterval) {
     lastLoggedSequence = values.sequence;
     lastSampleAt = millis();
+    const TeamRecord *team = findTeam(settings.team);
+    const float lift =
+        team != nullptr ? calibratedForceNewtons(team, values.liftVolts, true)
+                        : NAN;
+    const float drag =
+        team != nullptr ? calibratedForceNewtons(team, values.dragVolts, false)
+                        : NAN;
+    const bool calibrated = isfinite(lift) && isfinite(drag);
+    if (calibrated) {
+      updateSteadyState(lift, drag, settings, millis());
+    } else {
+      resetSteadyStateTracking();
+    }
+    const bool steadyState = steadyStateAchieved;
     if (testSamples.size() < Config::MaxCsvSamples) {
       testSamples.push_back(
           {lastSampleAt - testStartedAt,
+           settings.setpointMph,
            values.liftRaw,
            values.dragRaw,
            values.liftVolts,
            values.dragVolts,
-           values.liftNewtons,
-           values.dragNewtons,
-           values.calibrationLoaded});
+           lift,
+           drag,
+           calibrated});
+    }
+
+    if (measurementSocket.count() > 0) {
+      JsonDocument measurement;
+      measurement["running"] = true;
+      measurement["adsAvailable"] = true;
+      measurement["setpoint"] = settings.setpointMph;
+      measurement["speed"] = settings.setpointMph;
+      measurement["steadyState"] = steadyState;
+      measurement["liftRaw"] = values.liftRaw;
+      measurement["dragRaw"] = values.dragRaw;
+      measurement["liftVolts"] = values.liftVolts;
+      measurement["dragVolts"] = values.dragVolts;
+      measurement["sampleSequence"] = values.sequence;
+      if (calibrated) {
+        measurement["lift"] = lift;
+        measurement["drag"] = drag;
+      } else {
+        measurement["lift"] = nullptr;
+        measurement["drag"] = nullptr;
+      }
+      if (calibrated && steadyState) {
+        measurement["steadyStateLift"] = lift;
+        measurement["steadyStateDrag"] = drag;
+      } else {
+        measurement["steadyStateLift"] = nullptr;
+        measurement["steadyStateDrag"] = nullptr;
+      }
+      measurement["calibrationLoaded"] = calibrated;
+      if (pendingMeasurementCount == 0) {
+        pendingMeasurementBatch = "";
+        measurementBatchStartedAt = millis();
+      } else {
+        pendingMeasurementBatch += ',';
+      }
+      serializeJson(measurement, pendingMeasurementBatch);
+      ++pendingMeasurementCount;
     }
   }
   unlockState();
+
+  if (measurementSocket.count() == 0) {
+    pendingMeasurementBatch = "";
+    pendingMeasurementCount = 0;
+  } else if (pendingMeasurementCount > 0 &&
+             (pendingMeasurementCount >= MaxMeasurementBatchSize ||
+              millis() - measurementBatchStartedAt >=
+                  MeasurementBatchIntervalMs)) {
+    String batch;
+    batch.reserve(pendingMeasurementBatch.length() + 2);
+    batch = '[';
+    batch += pendingMeasurementBatch;
+    batch += ']';
+    if (measurementSocket.availableForWriteAll()) {
+      measurementSocket.textAll(batch);
+    }
+    pendingMeasurementBatch = "";
+    pendingMeasurementCount = 0;
+  }
+  if (stopTunnel) {
+    const char *error = nullptr;
+    if (!stopWindTunnelControl(&error)) {
+      Serial.print("ERROR: Tunnel safe-stop failed: ");
+      Serial.println(error != nullptr ? error : "unknown error");
+    } else if (stopError != nullptr) {
+      Serial.print("ERROR: Speed sweep stopped: ");
+      Serial.println(stopError);
+    }
+  }
 }

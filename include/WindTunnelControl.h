@@ -22,6 +22,7 @@ struct WindTunnelControlStatus {
 void initializeWindTunnelControl();
 void updateWindTunnelControl();
 bool setWindTunnelTargetSpeed(float mph, const char **error);
+bool updateWindTunnelTargetSpeedDuringTest(float mph, const char **error);
 bool startWindTunnelControl(const char **error);
 bool stopWindTunnelControl(const char **error);
 bool initializeDAC();

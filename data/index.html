@@ -41,6 +41,7 @@
     .value { font-weight: bold; text-align: right; }
     .measurements { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .measure { border: 1px solid var(--line); padding: 12px; }
+    #liftMeasure[hidden], #dragMeasure[hidden] { display: none; }
     .measure h3 { margin: 0 0 9px; font-size: 12px; text-transform: uppercase; }
     .force { font-size: 25px; font-weight: bold; }
     .raw { color: var(--muted); font-size: 12px; margin-top: 6px; }
@@ -55,6 +56,10 @@
     .setpoint-value { font-weight: bold; }
     .notice { margin-top: 12px; padding: 10px; border: 1px solid var(--line); background: var(--wash); line-height: 1.5; }
     .chart-wrap { height: 300px; margin-top: 8px; }
+    .table-wrap { overflow-x: auto; margin-top: 12px; }
+    table { width: 100%; border-collapse: collapse; min-width: 470px; }
+    th, td { padding: 8px; border: 1px solid var(--line); text-align: left; }
+    th { background: var(--wash); }
     canvas { width: 100%; height: 100%; display: block; }
     .legend { display: flex; gap: 16px; color: var(--muted); font-size: 12px; }
     .legend span::before { content: ""; display: inline-block; width: 17px; height: 2px; margin: 0 5px 3px 0; background: #111; }
@@ -99,7 +104,7 @@
             <span>ESP32</span><span class="value" id="espStatus">Unknown</span>
             <span>ADS1115</span><span class="value" id="adcStatus">Unknown</span>
             <span>Test</span><span class="value" id="testState">No active test</span>
-            <span>Actual wind speed</span><span class="value">Unknown</span>
+            <span>Calibrated windspeed</span><span class="value"><span id="overviewCalibratedSpeed">—</span> mph</span>
             <span>Wind-speed setpoint</span><span class="value"><span id="overviewSetpoint">—</span> mph</span>
             <span>Calibration</span><span class="value" id="overviewCalibration">Unknown</span>
           </div>
@@ -119,31 +124,40 @@
           </div>
         </div>
       </div>
-      <div class="notice">Force measurements require valid load-cell calibration. Actual wind speed is unknown because no verified airspeed sensor is configured. Hardware tunnel control is disabled by default.</div>
     </section>
 
     <section class="page" id="measurements">
       <div class="card">
         <h2>Live Measurements <span class="muted" id="measurementState">No active test</span></h2>
         <div class="body">
+          <div class="actions" aria-label="Visible load cells">
+            <label><input id="showLift" type="checkbox" checked onchange="updateMeasurementVisibility()"> Show lift</label>
+            <label><input id="showDrag" type="checkbox" checked onchange="updateMeasurementVisibility()"> Show drag</label>
+          </div>
+          <div class="message" id="steadyStateTestStatus" role="status">Steady state is evaluated during an active test.</div>
           <div class="measurements">
-            <div class="measure">
+            <div class="measure" id="liftMeasure">
               <h3>Lift</h3>
               <div class="force" id="liftValue">—</div>
               <div id="liftUnit">Force unavailable</div>
               <div class="raw">ADC: <span id="liftRaw">—</span> counts · Voltage: <span id="liftVolts">—</span> V</div>
+              <div class="raw">Steady-state value: <span id="liftSteady">—</span></div>
             </div>
-            <div class="measure">
+            <div class="measure" id="dragMeasure">
               <h3>Drag</h3>
               <div class="force" id="dragValue">—</div>
               <div id="dragUnit">Force unavailable</div>
               <div class="raw">ADC: <span id="dragRaw">—</span> counts · Voltage: <span id="dragVolts">—</span> V</div>
+              <div class="raw">Steady-state value: <span id="dragSteady">—</span></div>
             </div>
           </div>
           <h3>Output Voltage History</h3>
           <div class="muted">Vertical axis: filtered voltage (mV) · Horizontal axis: sample sequence</div>
           <div class="chart-wrap"><canvas id="chart" aria-label="Lift and drag output voltage in millivolts over time"></canvas></div>
-          <div class="legend"><span>Lift voltage</span><span class="drag">Drag voltage</span></div>
+          <div class="legend">
+            <span id="liftLegend">Lift voltage</span>
+            <span class="drag" id="dragLegend">Drag voltage</span>
+          </div>
           <div class="footer">Samples collected: <span id="sampleCount">0</span></div>
           <div class="actions"><button onclick="exportCSV()">Download CSV</button></div>
         </div>
@@ -157,7 +171,12 @@
           <div class="form-grid">
             <div>
               <label for="team">Team</label>
-              <select id="team"><option>Team 1</option><option>Team 2</option><option>Team 3</option><option>Team 4</option><option>Team 5</option></select>
+              <div class="value-preset">
+                <select id="team" aria-label="Current team" onchange="selectTeam()">
+                  <option value="">Create or select a team</option>
+                </select>
+                <button type="button" onclick="createTeam()">Create Team</button>
+              </div>
             </div>
             <div>
               <label for="object">Test object</label>
@@ -168,9 +187,19 @@
               <select id="units"><option value="N">Newtons (N)</option><option value="lbf">Pounds-force (lbf)</option><option value="g">Grams-force (g)</option></select>
             </div>
           </div>
-          <div class="setpoint">
-            <label for="speed">Wind-speed setpoint: <span class="setpoint-value"><span id="speedValue">25.0</span> mph</span></label>
-            <input id="speed" type="range" min="20" max="40" value="25" step="0.5">
+          <div class="form-grid" style="margin-top: 14px">
+            <div>
+              <label for="startSpeed">Starting windspeed (mph)</label>
+              <input id="startSpeed" type="number" min="4" max="40" value="25" step="0.5" required>
+            </div>
+            <div>
+              <label for="endSpeed">Ending windspeed (mph)</label>
+              <input id="endSpeed" type="number" min="20" max="40" value="25" step="0.5" required>
+            </div>
+            <div>
+              <label for="speedIncrement">Windspeed increment (mph)</label>
+              <input id="speedIncrement" type="number" min="0.5" max="20" value="0.5" step="0.5" required>
+            </div>
           </div>
           <div class="notice">
             <strong>Wind Tunnel Control</strong>
@@ -179,13 +208,9 @@
               <span>Estimated fan speed</span><span class="value"><span id="tunnelRpm">—</span> RPM</span>
               <span>Calculated control voltage</span><span class="value"><span id="tunnelVoltage">—</span> V (not measured output)</span>
               <span>DAC command sent</span><span class="value"><span id="tunnelCommandedVoltage">—</span></span>
-              <span>Physical voltage verified</span><span class="value" id="tunnelVoltageVerified">No feedback</span>
               <span>DAC status</span><span class="value" id="tunnelDacStatus">Unavailable</span>
               <span>Control mode</span><span class="value" id="tunnelControlMode">Simulation</span>
               <span>Tunnel status</span><span class="value" id="tunnelRunning">Stopped</span>
-              <span>Stabilization timer</span><span class="value" id="tunnelTimer">Not running</span>
-              <span>Actual wind speed</span><span class="value">Unknown</span>
-              <span>Steady state</span><span class="value" id="tunnelSteadyState">Not verified</span>
             </div>
             <div class="actions" style="margin-top: 10px">
               <button id="applySpeedBtn" onclick="applyTunnelSpeed()">Apply Speed</button>
@@ -209,18 +234,9 @@
           </div>
           <div class="form-grid two">
             <div>
-              <label for="duration">Test duration</label>
-              <div class="value-preset">
-                <input id="duration" type="number" min="1" max="60" step="1" value="30" required aria-label="Test duration in seconds">
-                <select id="durationPreset" aria-label="Test duration presets">
-                  <option value="">Custom value</option>
-                  <option value="10">10 seconds</option>
-                  <option value="20">20 seconds</option>
-                  <option value="30" selected>30 seconds</option>
-                  <option value="60">60 seconds</option>
-                </select>
-              </div>
-              <div class="muted">Enter 1–60 seconds or choose a preset.</div>
+              <label for="stabilizationSeconds">Maximum time at each speed (seconds)</label>
+              <input id="stabilizationSeconds" type="number" min="1" max="3600" step="1" value="10" required>
+              <div class="muted">Advances sooner when steady state is reached; this is the per-speed timeout.</div>
             </div>
             <div>
               <label for="sampleRate">Logging sample rate</label>
@@ -236,7 +252,21 @@
               <div class="muted">Enter 1–50 Hz or choose a preset.</div>
             </div>
           </div>
-          <div class="notice">The setpoint is a target, not a measured wind speed. It controls no physical output in simulation mode. Settings apply when a test starts. Sensor readings are recorded only while the test is active.</div>
+          <div class="form-grid" style="margin-top: 14px">
+            <div>
+              <label for="steadyStateError">Steady-state error tolerance (N)</label>
+              <input id="steadyStateError" type="number" min="0.001" max="100" step="any" value="0.05" required>
+            </div>
+            <div>
+              <label for="movingAverageWindow">Moving-average window (seconds)</label>
+              <input id="movingAverageWindow" type="number" min="0.1" max="10" step="0.1" value="1" required>
+            </div>
+            <div>
+              <label for="steadyStateHold">Required steady duration (seconds)</label>
+              <input id="steadyStateHold" type="number" min="1" max="3600" step="1" value="2" required>
+            </div>
+          </div>
+          <div class="notice">Steady state requires both calibrated load-cell readings to stay within the error tolerance of their moving averages for the required duration. The sweep advances when steady state is reached or the per-speed timeout expires. A timeout does not indicate steady state.</div>
           <div class="message" id="setupMessage" role="status"></div>
         </div>
       </div>
@@ -250,8 +280,24 @@
             <span>Calibration status</span><span class="value" id="calibrationStatus">Unknown</span>
             <span>Force output</span><span class="value" id="forceStatus">Unavailable</span>
           </div>
-          <div class="notice">Calibration values are not provided. Apply known loads to each load cell, determine tare counts and Newtons per count, then enter the verified values in <code>include/Config.h</code>. This dashboard cannot create or assume calibration values.</div>
-          <div class="actions"><button onclick="checkCalibration()">Check Calibration Status</button></div>
+          <p>Current team: <strong id="calibrationTeam">No team selected</strong>. Enter a known weight range that includes zero, then record both sensor output voltages at each weight. Weights are entered in grams; the measured zero reference is used to balance the curve.</p>
+          <div class="form-grid">
+            <div><label for="startWeight">Start weight (g)</label><input id="startWeight" type="number" step="any" value="0" required></div>
+            <div><label for="endWeight">End weight (g)</label><input id="endWeight" type="number" step="any" value="500" required></div>
+            <div><label for="incrementWeight">Weight increment (g)</label><input id="incrementWeight" type="number" min="0.001" step="any" value="100" required></div>
+          </div>
+          <div class="actions" style="margin-top: 12px">
+            <button type="button" onclick="buildCalibrationTable()">Build Calibration Table</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Known weight (g, editable)</th><th>Lift output (V)</th><th>Drag output (V)</th></tr></thead>
+              <tbody id="calibrationRows"></tbody>
+            </table>
+          </div>
+          <div class="actions" style="margin-top: 12px">
+            <button type="button" onclick="saveCalibration()">Save Calibration for Current Team</button>
+          </div>
           <div class="message" id="calibrationMessage" role="status"></div>
         </div>
       </div>
@@ -261,7 +307,6 @@
   <script>
     const API = {
       status: '/api/status',
-      data: '/api/data',
       start: '/api/start',
       stop: '/api/stop',
       tunnelSetSpeed: '/api/tunnel/set-speed',
@@ -270,6 +315,8 @@
       tunnelStatus: '/api/tunnel/status',
       dacBenchOutput: '/api/tunnel/bench-output',
       dacBenchStop: '/api/tunnel/bench-stop',
+      teams: '/api/teams',
+      selectTeam: '/api/team/select',
       calibration: '/api/calibration',
       csv: '/api/export.csv'
     };
@@ -278,13 +325,23 @@
     let calibrationLoaded = false;
     let samples = [];
     let lastSequence = null;
-    let dataTimer = null;
-    let readingData = false;
+    let measurementSocket = null;
+    let measurementReconnectTimer = null;
 
     function showPage(page) {
       document.querySelectorAll('.page').forEach(section => section.classList.toggle('active', section.id === page));
       document.querySelectorAll('.nav button').forEach(button => button.classList.toggle('active', button.dataset.page === page));
       if (page === 'measurements') drawChart();
+    }
+
+    function updateMeasurementVisibility() {
+      const showLift = $('showLift').checked;
+      const showDrag = $('showDrag').checked;
+      $('liftMeasure').hidden = !showLift;
+      $('dragMeasure').hidden = !showDrag;
+      $('liftLegend').hidden = !showLift;
+      $('dragLegend').hidden = !showDrag;
+      drawChart();
     }
 
     function clearMeasurements() {
@@ -298,26 +355,30 @@
       $('dragRaw').textContent = '—';
       $('liftVolts').textContent = '—';
       $('dragVolts').textContent = '—';
+      $('liftSteady').textContent = '—';
+      $('dragSteady').textContent = '—';
       $('overviewLift').textContent = '—';
       $('overviewDrag').textContent = '—';
       $('sampleCount').textContent = '0';
       $('measurementState').textContent = 'No active test';
+      $('steadyStateTestStatus').textContent = 'Steady state is evaluated during an active test.';
       drawChart();
     }
 
     function setRunning(next) {
-      if (running && !next) clearMeasurements();
+      if (!running && next) clearMeasurements();
       running = next;
       $('startBtn').disabled = running;
       $('stopBtn').disabled = !running;
-      $('testState').textContent = running ? 'Running' : 'No active test';
-      $('measurementState').textContent = running ? 'Test active' : 'No active test';
-      if (running && dataTimer === null) {
-        dataTimer = setInterval(readData, 250);
-        readData();
-      } else if (!running && dataTimer !== null) {
-        clearInterval(dataTimer);
-        dataTimer = null;
+      const completed = !running && samples.length > 0;
+      $('testState').textContent = running ? 'Running' : completed ? 'Complete' : 'No active test';
+      $('measurementState').textContent = running
+        ? 'Test active · live stream'
+        : completed ? 'Test complete · results retained' : 'No active test';
+      if (running) {
+        $('steadyStateTestStatus').textContent = 'Checking steady state for the current speed…';
+      } else if (completed) {
+        $('steadyStateTestStatus').textContent = 'Test complete; final steady-state status is retained above.';
       }
     }
 
@@ -329,15 +390,33 @@
     }
 
     async function startTest() {
-      if (!$('duration').reportValidity() || !$('sampleRate').reportValidity()) {
+      if (!$('team').value || !$('startSpeed').reportValidity() ||
+          !$('endSpeed').reportValidity() || !$('speedIncrement').reportValidity() ||
+          !$('stabilizationSeconds').reportValidity() ||
+          !$('steadyStateError').reportValidity() ||
+          !$('movingAverageWindow').reportValidity() ||
+          !$('steadyStateHold').reportValidity() ||
+          !$('sampleRate').reportValidity()) {
+        $('setupMessage').textContent = 'Create or select a team and enter valid sweep settings.';
+        return;
+      }
+      if (Number($('steadyStateHold').value) > Number($('stabilizationSeconds').value)) {
+        $('steadyStateHold').setCustomValidity('Required steady duration must not exceed the per-speed timeout.');
+        $('steadyStateHold').reportValidity();
+        $('steadyStateHold').setCustomValidity('');
         return;
       }
       const body = {
         team: $('team').value,
         object: $('object').value,
         units: $('units').value,
-        speed: Number($('speed').value),
-        duration: Number($('duration').value),
+        startSpeed: Number($('startSpeed').value),
+        endSpeed: Number($('endSpeed').value),
+        speedIncrement: Number($('speedIncrement').value),
+        stabilizationSeconds: Number($('stabilizationSeconds').value),
+        steadyStateErrorNewtons: Number($('steadyStateError').value),
+        movingAverageWindowMs: Math.round(Number($('movingAverageWindow').value) * 1000),
+        steadyStateHoldSeconds: Number($('steadyStateHold').value),
         sampleRate: Number($('sampleRate').value)
       };
       try {
@@ -347,7 +426,6 @@
           body: JSON.stringify(body)
         });
         updateTunnelStatus(result);
-        clearMeasurements();
         setRunning(true);
         $('setupMessage').textContent = result.controlMode === 'hardware'
           ? 'Test started; DAC command sent, but physical output voltage is not measured.'
@@ -366,7 +444,7 @@
         });
         updateTunnelStatus(result);
         setRunning(false);
-        $('setupMessage').textContent = 'Test stopped. Displayed measurements were cleared.';
+        $('setupMessage').textContent = 'Test stopped. Results remain visible until the next test starts.';
       } catch (error) {
         $('setupMessage').textContent = `Could not stop test: ${error.message}`;
       }
@@ -376,6 +454,10 @@
       $('tunnelTarget').textContent = Number.isFinite(Number(status.targetSpeedMph))
         ? Number(status.targetSpeedMph).toFixed(1)
         : '—';
+      $('overviewCalibratedSpeed').textContent =
+        Number.isFinite(Number(status.calibratedSpeedMph))
+          ? Number(status.calibratedSpeedMph).toFixed(1)
+          : '—';
       $('tunnelRpm').textContent = status.estimatedFanRPM !== null &&
         status.estimatedFanRPM !== undefined && Number.isFinite(Number(status.estimatedFanRPM))
         ? Number(status.estimatedFanRPM).toFixed(0)
@@ -388,9 +470,6 @@
         status.commandedVoltage !== undefined && Number.isFinite(Number(status.commandedVoltage))
         ? `${Number(status.commandedVoltage).toFixed(3)} V ${status.commandAccepted ? 'sent' : 'last command (status uncertain)'}`
         : 'No command';
-      $('tunnelVoltageVerified').textContent = status.outputVoltageVerified
-        ? 'Verified by feedback'
-        : 'Not measured';
       $('tunnelDacStatus').textContent = status.dacConnected
         ? `Connected (${status.dacType || 'DAC'} ${status.dacAddress || ''})`
         : 'Unavailable';
@@ -398,14 +477,6 @@
       $('tunnelRunning').textContent = status.running
         ? (status.controlMode === 'hardware' ? 'Running (DAC command)' : 'Running (simulation)')
         : 'Stopped';
-      const elapsed = Number(status.stabilizationElapsedMs);
-      const period = Number(status.stabilizationPeriodMs);
-      $('tunnelTimer').textContent = status.running && Number.isFinite(elapsed) && Number.isFinite(period)
-        ? `${(elapsed / 1000).toFixed(1)} / ${(period / 1000).toFixed(1)} s (timer only)`
-        : 'Not running';
-      $('tunnelSteadyState').textContent = status.steadyStateVerified
-        ? 'Verified'
-        : 'Not verified (no airspeed sensor)';
       $('tunnelMessage').textContent = status.message ||
         'Simulation mode; no physical fan command is sent.';
       $('dacBenchPanel').hidden = !status.dacBenchTestEnabled;
@@ -447,12 +518,12 @@
         const status = await requestJson(API.tunnelSetSpeed, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ targetSpeedMph: Number($('speed').value) })
+          body: JSON.stringify({ targetSpeedMph: Number($('startSpeed').value) })
         });
         updateTunnelStatus(status);
         $('setupMessage').textContent = 'Target calculated. Applying speed does not start the fan.';
       } catch (error) {
-        $('tunnelTarget').textContent = Number($('speed').value).toFixed(1);
+        $('tunnelTarget').textContent = Number($('startSpeed').value).toFixed(1);
         $('tunnelRpm').textContent = '—';
         $('tunnelVoltage').textContent = '—';
         $('tunnelMessage').textContent = `Could not apply target: ${error.message}`;
@@ -479,38 +550,69 @@
       return `${force.toFixed(3)} N`;
     }
 
-    async function readData() {
-      if (readingData || !running) return;
-      readingData = true;
-      try {
-        const data = await requestJson(API.data, { cache: 'no-store' });
-        if (!data.running) {
-          setRunning(false);
-          return;
-        }
-        if (data.liftRaw === null || data.dragRaw === null) return;
-        $('liftRaw').textContent = Number(data.liftRaw).toFixed(1);
-        $('dragRaw').textContent = Number(data.dragRaw).toFixed(1);
-        $('liftVolts').textContent = Number(data.liftVolts).toFixed(6);
-        $('dragVolts').textContent = Number(data.dragVolts).toFixed(6);
-        $('liftValue').textContent = displayForce(data.lift);
-        $('dragValue').textContent = displayForce(data.drag);
-        $('liftUnit').textContent = data.lift === null ? 'Force unavailable · ADC counts shown' : 'Calibrated force';
-        $('dragUnit').textContent = data.drag === null ? 'Force unavailable · ADC counts shown' : 'Calibrated force';
-        $('overviewLift').textContent = displayForce(data.lift);
-        $('overviewDrag').textContent = displayForce(data.drag);
-        if (data.sampleSequence !== lastSequence) {
-          lastSequence = data.sampleSequence;
-          samples.push({ lift: Number(data.liftVolts) * 1000, drag: Number(data.dragVolts) * 1000 });
-          if (samples.length > 120) samples.shift();
-          $('sampleCount').textContent = String(samples.length);
-          drawChart();
-        }
-      } catch (error) {
-        $('measurementState').textContent = `Data unavailable: ${error.message}`;
-      } finally {
-        readingData = false;
+    function handleMeasurement(data, redraw = true) {
+      if (!data.running) {
+        setRunning(false);
+        return;
       }
+      if (!running) setRunning(true);
+      if (data.liftRaw === null || data.dragRaw === null ||
+          data.sampleSequence === lastSequence) return;
+      $('liftRaw').textContent = Number(data.liftRaw).toFixed(1);
+      $('dragRaw').textContent = Number(data.dragRaw).toFixed(1);
+      $('liftVolts').textContent = Number(data.liftVolts).toFixed(6);
+      $('dragVolts').textContent = Number(data.dragVolts).toFixed(6);
+      $('liftValue').textContent = displayForce(data.lift);
+      $('dragValue').textContent = displayForce(data.drag);
+      $('liftSteady').textContent = displayForce(data.steadyStateLift);
+      $('dragSteady').textContent = displayForce(data.steadyStateDrag);
+      $('steadyStateTestStatus').textContent = data.steadyState
+        ? 'Steady state achieved for the current speed.'
+        : 'Steady state not yet achieved for the current speed.';
+      $('liftUnit').textContent = data.lift === null ? 'Force unavailable · ADC counts shown' : 'Calibrated force';
+      $('dragUnit').textContent = data.drag === null ? 'Force unavailable · ADC counts shown' : 'Calibrated force';
+      $('overviewLift').textContent = displayForce(data.lift);
+      $('overviewDrag').textContent = displayForce(data.drag);
+      lastSequence = data.sampleSequence;
+      samples.push({ lift: Number(data.liftVolts) * 1000, drag: Number(data.dragVolts) * 1000 });
+      if (samples.length > 120) samples.shift();
+      $('sampleCount').textContent = String(samples.length);
+      if (redraw) drawChart();
+    }
+
+    function connectMeasurementSocket() {
+      if (measurementSocket &&
+          (measurementSocket.readyState === WebSocket.OPEN ||
+           measurementSocket.readyState === WebSocket.CONNECTING)) return;
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      measurementSocket = new WebSocket(`${protocol}//${location.host}/api/ws`);
+      measurementSocket.addEventListener('open', () => {
+        if (running) $('measurementState').textContent = 'Test active · live socket';
+      });
+      measurementSocket.addEventListener('message', event => {
+        try {
+          const batch = JSON.parse(event.data);
+          if (!Array.isArray(batch)) throw new Error('Expected a sample batch');
+          let receivedSample = false;
+          batch.forEach(data => {
+            if (data.running) {
+              handleMeasurement(data, false);
+              receivedSample = true;
+            }
+          });
+          if (receivedSample) drawChart();
+        } catch (error) {
+          $('measurementState').textContent = `Invalid measurement stream data: ${error.message}`;
+        }
+      });
+      measurementSocket.addEventListener('error', () => {
+        if (running) $('measurementState').textContent = 'Measurement socket reconnecting…';
+      });
+      measurementSocket.addEventListener('close', () => {
+        if (running) $('measurementState').textContent = 'Measurement socket reconnecting…';
+        clearTimeout(measurementReconnectTimer);
+        measurementReconnectTimer = setTimeout(connectMeasurementSocket, 2000);
+      });
     }
 
     async function refreshStatus() {
@@ -525,7 +627,8 @@
         $('overviewCalibration').textContent = calibrationText;
         $('forceStatus').textContent = calibrationLoaded ? 'Available' : 'Unavailable';
         $('overviewSetpoint').textContent = Number(status.setpoint).toFixed(1);
-        $('overviewTeam').textContent = status.running ? status.team : '—';
+        $('overviewCalibratedSpeed').textContent = Number(status.calibratedSpeedMph).toFixed(1);
+        $('overviewTeam').textContent = status.team || '—';
         $('overviewObject').textContent = status.running ? status.object : '—';
         setRunning(Boolean(status.running));
         refreshTunnelStatus();
@@ -536,21 +639,180 @@
       }
     }
 
-    async function checkCalibration() {
+    async function refreshCalibration() {
       try {
-        const response = await fetch(API.calibration, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: '{}'
-        });
-        const result = await response.json();
+        const result = await requestJson(API.calibration, { cache: 'no-store' });
         calibrationLoaded = Boolean(result.calibrationLoaded);
         $('calibrationStatus').textContent = calibrationLoaded ? 'Loaded' : 'Not calibrated';
         $('overviewCalibration').textContent = calibrationLoaded ? 'Loaded' : 'Not calibrated';
         $('forceStatus').textContent = calibrationLoaded ? 'Available' : 'Unavailable';
-        $('calibrationMessage').textContent = result.error || (response.ok ? 'Calibration status updated.' : `HTTP ${response.status}`);
+        $('calibrationTeam').textContent = result.team || 'No team selected';
+        $('calibrationRows').replaceChildren();
+        if (result.points && result.points.length > 0) {
+          $('startWeight').value = result.points[0].weightGrams;
+          $('endWeight').value = result.points[result.points.length - 1].weightGrams;
+          $('incrementWeight').value =
+            result.points[1].weightGrams - result.points[0].weightGrams;
+          buildCalibrationTable(result.points);
+        }
+        $('calibrationMessage').textContent = calibrationLoaded
+          ? 'Calibration loaded from ESP32 storage.'
+          : 'No calibration is saved for this team yet.';
       } catch (error) {
-        $('calibrationMessage').textContent = `Could not check calibration: ${error.message}`;
+        $('calibrationMessage').textContent = `Could not load calibration: ${error.message}`;
+      }
+    }
+
+    async function refreshTeams() {
+      try {
+        const result = await requestJson(API.teams, { cache: 'no-store' });
+        const select = $('team');
+        const selected = result.currentTeam || '';
+        select.replaceChildren(new Option('Create or select a team', ''));
+        (result.teams || []).forEach(team => {
+          select.add(new Option(team.name, team.name));
+        });
+        select.value = selected;
+        $('calibrationTeam').textContent = selected || 'No team selected';
+        if (selected) refreshCalibration();
+      } catch (error) {
+        $('setupMessage').textContent = `Could not load teams: ${error.message}`;
+      }
+    }
+
+    async function selectTeam() {
+      const name = $('team').value;
+      if (!name) {
+        $('calibrationTeam').textContent = 'No team selected';
+        calibrationLoaded = false;
+        $('calibrationStatus').textContent = 'Not calibrated';
+        $('overviewCalibration').textContent = 'Not calibrated';
+        $('forceStatus').textContent = 'Unavailable';
+        return;
+      }
+      try {
+        await requestJson(API.selectTeam, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        });
+        $('calibrationTeam').textContent = name;
+        refreshCalibration();
+      } catch (error) {
+        $('setupMessage').textContent = `Could not select team: ${error.message}`;
+        refreshTeams();
+      }
+    }
+
+    async function createTeam() {
+      const name = window.prompt('Enter a name for the new team:');
+      if (name === null) return;
+      try {
+        await requestJson(API.teams, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        });
+        await refreshTeams();
+        $('setupMessage').textContent = `Team "${name.trim()}" created and selected.`;
+      } catch (error) {
+        $('setupMessage').textContent = `Could not create team: ${error.message}`;
+      }
+    }
+
+    function buildCalibrationTable(savedPoints) {
+      const start = Number($('startWeight').value);
+      const end = Number($('endWeight').value);
+      const increment = Number($('incrementWeight').value);
+      if (!Number.isFinite(start) || !Number.isFinite(end) ||
+          !Number.isFinite(increment) || start >= end || increment <= 0 ||
+          start > 0 || end < 0) {
+        $('calibrationMessage').textContent = 'Enter an increasing weight range that brackets zero and a positive increment.';
+        return;
+      }
+      const intervals = (end - start) / increment;
+      if ((!savedPoints &&
+           Math.abs(intervals - Math.round(intervals)) > 0.001) ||
+          (savedPoints ? savedPoints.length > 51 : intervals > 50)) {
+        $('calibrationMessage').textContent = 'The range must divide evenly into no more than 50 increments.';
+        return;
+      }
+      const rows = $('calibrationRows');
+      rows.replaceChildren();
+      const rowCount = savedPoints ? savedPoints.length : Math.round(intervals) + 1;
+      for (let i = 0; i < rowCount; i++) {
+        const weight = savedPoints
+          ? Number(savedPoints[i].weightGrams)
+          : Number((start + increment * i).toFixed(6));
+        const saved = savedPoints && savedPoints[i];
+        const row = document.createElement('tr');
+        const weightCell = document.createElement('td');
+        const weightInput = document.createElement('input');
+        weightInput.type = 'number';
+        weightInput.step = 'any';
+        weightInput.required = true;
+        weightInput.value = String(weight);
+        weightInput.dataset.field = 'weight';
+        weightInput.setAttribute('aria-label', `Known weight for calibration row ${i + 1}`);
+        weightCell.appendChild(weightInput);
+        row.appendChild(weightCell);
+        ['liftVolts', 'dragVolts'].forEach((key, channel) => {
+          const cell = document.createElement('td');
+          const input = document.createElement('input');
+          input.type = 'number';
+          input.step = 'any';
+          input.required = true;
+          input.setAttribute('aria-label', `${channel === 0 ? 'Lift' : 'Drag'} output at ${weight} grams`);
+          if (saved && Math.abs(saved.weightGrams - weight) < 0.001) {
+            input.value = saved[key];
+          }
+          cell.appendChild(input);
+          row.appendChild(cell);
+        });
+        rows.appendChild(row);
+      }
+      $('calibrationMessage').textContent = 'Enter the measured lift and drag voltage at every listed weight.';
+    }
+
+    async function saveCalibration() {
+      if (!$('team').value) {
+        $('calibrationMessage').textContent = 'Create or select a team before saving calibration.';
+        return;
+      }
+      const inputs = Array.from($('calibrationRows').querySelectorAll('input'));
+      if (inputs.length === 0 || !inputs.every(input => input.reportValidity())) {
+        $('calibrationMessage').textContent = 'Build the table and enter every voltage value.';
+        return;
+      }
+      const points = [];
+      const rows = Array.from($('calibrationRows').rows);
+      rows.forEach(row => {
+        const fields = row.querySelectorAll('input');
+        points.push({
+          weightGrams: Number(fields[0].value),
+          liftVolts: Number(fields[1].value),
+          dragVolts: Number(fields[2].value)
+        });
+      });
+      try {
+        const result = await requestJson(API.calibration, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            startWeightGrams: points[0].weightGrams,
+            endWeightGrams: points[points.length - 1].weightGrams,
+            incrementGrams: Number($('incrementWeight').value),
+            points
+          })
+        });
+        calibrationLoaded = Boolean(result.calibrationLoaded);
+        $('calibrationMessage').textContent =
+          `Saved ${result.pointCount} calibration points for ${result.team} on the ESP32.`;
+        $('calibrationStatus').textContent = 'Loaded';
+        $('overviewCalibration').textContent = 'Loaded';
+        $('forceStatus').textContent = 'Available';
+      } catch (error) {
+        $('calibrationMessage').textContent = `Could not save calibration: ${error.message}`;
       }
     }
 
@@ -578,13 +840,25 @@
         const y = pad.top + plotHeight * i / 4;
         context.beginPath(); context.moveTo(pad.left, y); context.lineTo(width - pad.right, y); context.stroke();
       }
-      if (!running || samples.length < 2) {
+      if (samples.length < 2) {
         context.textAlign = 'center';
-        context.fillText('No active test', pad.left + plotWidth / 2, pad.top + plotHeight / 2);
+        context.fillText(
+          running ? 'Waiting for samples' : 'No completed results',
+          pad.left + plotWidth / 2,
+          pad.top + plotHeight / 2
+        );
         return;
       }
-      let minimum = Math.min(...samples.map(sample => Math.min(sample.lift, sample.drag)));
-      let maximum = Math.max(...samples.map(sample => Math.max(sample.lift, sample.drag)));
+      const visibleChannels = [];
+      if ($('showLift').checked) visibleChannels.push('lift');
+      if ($('showDrag').checked) visibleChannels.push('drag');
+      if (visibleChannels.length === 0) {
+        context.textAlign = 'center';
+        context.fillText('Select lift or drag to show its trace', pad.left + plotWidth / 2, pad.top + plotHeight / 2);
+        return;
+      }
+      let minimum = Math.min(...samples.flatMap(sample => visibleChannels.map(key => sample[key])));
+      let maximum = Math.max(...samples.flatMap(sample => visibleChannels.map(key => sample[key])));
       if (minimum === maximum) { minimum -= 1; maximum += 1; }
       const margin = (maximum - minimum) * 0.1;
       minimum -= margin; maximum += margin;
@@ -595,7 +869,9 @@
         const value = maximum - (maximum - minimum) * i / 4;
         context.fillText(value.toFixed(2), pad.left - 6, pad.top + plotHeight * i / 4 + 4);
       }
-      [['lift', '#111'], ['drag', '#888']].forEach(([key, color]) => {
+      const channelColors = { lift: '#111', drag: '#888' };
+      visibleChannels.forEach(key => {
+        const color = channelColors[key];
         context.strokeStyle = color;
         context.lineWidth = 2;
         context.beginPath();
@@ -629,11 +905,12 @@
       });
     }
 
-    connectPreset('duration', 'durationPreset');
     connectPreset('sampleRate', 'sampleRatePreset');
-    $('speed').addEventListener('input', event => { $('speedValue').textContent = Number(event.target.value).toFixed(1); });
+    updateMeasurementVisibility();
     window.addEventListener('resize', drawChart);
+    connectMeasurementSocket();
     refreshStatus();
+    refreshTeams();
     setInterval(refreshStatus, 2000);
     drawChart();
   </script>

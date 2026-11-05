@@ -247,6 +247,11 @@ float mphToRPM(float mph) {
   }
 
   float rpm = NAN;
+  if (mph < speeds[0]) {
+    const float fraction = (mph - speeds[0]) / (speeds[1] - speeds[0]);
+    rpm = rpms[0] + fraction * (rpms[1] - rpms[0]);
+    return isfinite(rpm);
+  }
   return interpolate(mph, rpm, SpeedRpmData[0].mph,
                      SpeedRpmData[SpeedRpmDataCount - 1].mph, speeds, rpms,
                      SpeedRpmDataCount)
@@ -337,7 +342,7 @@ bool setWindTunnelTargetSpeed(float mph, const char **error) {
       fabsf(mph / Config::TunnelSpeedStepMph -
             roundf(mph / Config::TunnelSpeedStepMph)) > 0.001f) {
     if (error != nullptr) {
-      *error = "Target speed must be from 20 to 40 mph in 0.5 mph steps.";
+      *error = "Target speed must be from 4 to 40 mph in 0.5 mph steps.";
     }
     return false;
   }
@@ -368,6 +373,59 @@ bool setWindTunnelTargetSpeed(float mph, const char **error) {
   controlStatus.calculatedVoltage = voltage;
   controlStatus.calculationAvailable = true;
   portEXIT_CRITICAL(&controlMux);
+  return true;
+}
+
+bool updateWindTunnelTargetSpeedDuringTest(float mph, const char **error) {
+  if (!isfinite(mph) || mph < Config::MinTunnelSpeedMph ||
+      mph > Config::MaxTunnelSpeedMph ||
+      fabsf(mph / Config::TunnelSpeedStepMph -
+            roundf(mph / Config::TunnelSpeedStepMph)) > 0.001f) {
+    if (error != nullptr) {
+      *error = "Target speed must be from 4 to 40 mph in 0.5 mph steps.";
+    }
+    return false;
+  }
+
+  const float rpm = mphToRPM(mph);
+  const float voltage = mphToVoltage(mph);
+  if (!isfinite(rpm) || !isfinite(voltage)) {
+    if (error != nullptr) {
+      *error =
+          "Target speed is outside the supplied measured data range; "
+          "additional calibration is required.";
+    }
+    return false;
+  }
+
+  portENTER_CRITICAL(&controlMux);
+  if (!controlStatus.running || controlStatus.benchTestActive) {
+    portEXIT_CRITICAL(&controlMux);
+    if (error != nullptr) {
+      *error = "A speed sweep target can only change during an active test.";
+    }
+    return false;
+  }
+  const bool updatePhysicalOutput = Config::TunnelHardwareControlEnabled;
+  const bool dacConnected = controlStatus.dacConnected;
+  portEXIT_CRITICAL(&controlMux);
+
+  if (updatePhysicalOutput && (!dacConnected || !setDACVoltage(voltage))) {
+    if (error != nullptr) {
+      *error = "Could not update the physical tunnel output for the new target.";
+    }
+    return false;
+  }
+
+  portENTER_CRITICAL(&controlMux);
+  controlStatus.targetSpeedMph = mph;
+  controlStatus.estimatedFanRpm = rpm;
+  controlStatus.calculatedVoltage = voltage;
+  controlStatus.calculationAvailable = true;
+  portEXIT_CRITICAL(&controlMux);
+  if (error != nullptr) {
+    *error = nullptr;
+  }
   return true;
 }
 

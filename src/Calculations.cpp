@@ -8,29 +8,52 @@
 #include "Config.h"
 
 namespace {
-struct MovingAverage {
-  float values[Config::MovingAverageSamples] = {};
+constexpr float Pi = 3.14159265358979323846f;
+constexpr uint8_t DftBinCount = Config::DftRetainedFrequencyBins + 1;
+float dftCosines[DftBinCount] = {};
+float dftSines[DftBinCount] = {};
+
+struct DftLowPass {
+  float values[Config::DftWindowSamples] = {};
+  float real[DftBinCount] = {};
+  float imaginary[DftBinCount] = {};
   uint8_t next = 0;
   uint8_t count = 0;
   float sum = 0.0f;
 
   float add(float value) {
-    if (count == Config::MovingAverageSamples) {
-      sum -= values[next];
-    } else {
+    const float oldest = count == Config::DftWindowSamples ? values[next] : 0.0f;
+    if (count < Config::DftWindowSamples) {
       ++count;
+    } else {
+      sum -= oldest;
     }
     values[next] = value;
     sum += value;
-    next = (next + 1) % Config::MovingAverageSamples;
-    return sum / count;
+    next = (next + 1) % Config::DftWindowSamples;
+
+    const float difference = value - oldest;
+    for (uint8_t bin = 0; bin < DftBinCount; ++bin) {
+      const float previousReal = real[bin];
+      real[bin] = previousReal * dftCosines[bin] +
+                  imaginary[bin] * dftSines[bin] + difference;
+      imaginary[bin] = imaginary[bin] * dftCosines[bin] -
+                       previousReal * dftSines[bin];
+    }
+
+    if (count < Config::DftWindowSamples) return sum / count;
+    float filtered = real[0];
+    for (uint8_t bin = 1; bin < DftBinCount; ++bin) {
+      filtered += 2.0f * real[bin];
+    }
+    return filtered / Config::DftWindowSamples;
   }
 };
 
-MovingAverage liftRawFilter;
-MovingAverage dragRawFilter;
-MovingAverage liftVoltsFilter;
-MovingAverage dragVoltsFilter;
+DftLowPass liftRawFilter;
+DftLowPass dragRawFilter;
+DftLowPass liftVoltsFilter;
+DftLowPass dragVoltsFilter;
 MeasurementValues measurements = {};
 portMUX_TYPE measurementMux = portMUX_INITIALIZER_UNLOCKED;
 bool calibrationLoaded = false;
@@ -38,6 +61,13 @@ uint32_t lastInputSequence = 0;
 }  // namespace
 
 void initializeMeasurements() {
+  for (uint8_t bin = 0; bin < DftBinCount; ++bin) {
+    const float angle =
+        2.0f * Pi * bin / Config::DftWindowSamples;
+    dftCosines[bin] = cosf(angle);
+    dftSines[bin] = sinf(angle);
+  }
+
   calibrationLoaded =
       Config::CalibrationConfigured &&
       isfinite(Config::LiftTareCounts) && isfinite(Config::DragTareCounts) &&
@@ -54,10 +84,10 @@ void initializeMeasurements() {
 
 void updateMeasurements() {
   if (!isAdsConnected()) {
-    liftRawFilter = MovingAverage{};
-    dragRawFilter = MovingAverage{};
-    liftVoltsFilter = MovingAverage{};
-    dragVoltsFilter = MovingAverage{};
+    liftRawFilter = DftLowPass{};
+    dragRawFilter = DftLowPass{};
+    liftVoltsFilter = DftLowPass{};
+    dragVoltsFilter = DftLowPass{};
     portENTER_CRITICAL(&measurementMux);
     measurements.hasSample = false;
     portEXIT_CRITICAL(&measurementMux);
