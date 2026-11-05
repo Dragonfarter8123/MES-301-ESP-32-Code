@@ -5,6 +5,7 @@
 #include <ESPAsyncWebServer.h>
 #include <SPIFFS.h>
 #include <WiFi.h>
+#include <cstdlib>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -60,6 +61,14 @@ struct CsvStreamState {
   std::vector<TestSample> samples;
   String pending;
   size_t nextSample = 0;
+};
+
+constexpr size_t MaxStartRequestBytes = 1024;
+
+struct StartRequestBody {
+  size_t total;
+  size_t received;
+  uint8_t data[MaxStartRequestBytes];
 };
 
 constexpr size_t MaxTeams = 20;
@@ -639,13 +648,8 @@ bool validStartSettings(JsonDocument &document, TestSettings &result) {
   return true;
 }
 
-void handleStart(AsyncWebServerRequest *request, uint8_t *body, size_t length,
-                 size_t index, size_t total) {
-  if (index != 0 || length != total || total > 1024) {
-    sendError(request, 400, "Invalid or oversized request body");
-    return;
-  }
-
+void handleStartBody(AsyncWebServerRequest *request, uint8_t *body,
+                     size_t length) {
   JsonDocument document;
   if (deserializeJson(document, body, length)) {
     sendError(request, 400, "Request body must be valid JSON");
@@ -703,6 +707,46 @@ void handleStart(AsyncWebServerRequest *request, uint8_t *body, size_t length,
   response["setpoint"] = requested.setpointMph;
   addTunnelStatus(response);
   sendJson(request, 200, response);
+}
+
+void handleStart(AsyncWebServerRequest *request, uint8_t *body, size_t length,
+                 size_t index, size_t total) {
+  if (total > MaxStartRequestBytes) {
+    sendError(request, 400, "Invalid or oversized request body");
+    return;
+  }
+
+  auto *buffer = static_cast<StartRequestBody *>(request->_tempObject);
+  if (index == 0) {
+    free(buffer);
+    request->_tempObject = nullptr;
+    buffer = static_cast<StartRequestBody *>(
+        calloc(1, sizeof(StartRequestBody)));
+    if (buffer == nullptr) {
+      request->_tempObject = nullptr;
+      sendError(request, 503, "Could not buffer the start request");
+      return;
+    }
+    buffer->total = total;
+    request->_tempObject = buffer;
+  }
+  if (buffer == nullptr || total != buffer->total ||
+      index != buffer->received || length > total - buffer->received) {
+    free(buffer);
+    request->_tempObject = nullptr;
+    sendError(request, 400, "Invalid or incomplete request body");
+    return;
+  }
+
+  memcpy(buffer->data + index, body, length);
+  buffer->received += length;
+  if (buffer->received < buffer->total) {
+    return;
+  }
+
+  request->_tempObject = nullptr;
+  handleStartBody(request, buffer->data, buffer->received);
+  free(buffer);
 }
 
 void handleStop(AsyncWebServerRequest *request) {

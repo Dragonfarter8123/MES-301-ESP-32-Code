@@ -334,6 +334,8 @@
     let lastSequence = null;
     let measurementSocket = null;
     let measurementReconnectTimer = null;
+    let measurementSocketWanted = false;
+    let testStateRevision = 0;
     let steadyToleranceUnit = 'N';
 
     function forceUnitToNewtons(unit) {
@@ -415,6 +417,14 @@
       }
     }
 
+    function scheduleMeasurementReconnect() {
+        clearTimeout(measurementReconnectTimer);
+        measurementReconnectTimer = setTimeout(() => {
+          measurementReconnectTimer = null;
+          if (measurementSocketWanted) connectMeasurementSocket();
+        }, 2000);
+    }
+
     async function requestJson(url, options) {
       const response = await fetch(url, options);
       const result = await response.json().catch(() => ({}));
@@ -455,13 +465,16 @@
         sampleRate: Number($('sampleRate').value)
       };
       try {
+        testStateRevision++;
         const result = await requestJson(API.start, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body)
         });
+        testStateRevision++;
         updateTunnelStatus(result);
         setRunning(true);
+        connectMeasurementSocket();
         $('setupMessage').textContent = result.controlMode === 'hardware'
           ? 'Test started; DAC command sent, but physical output voltage is not measured.'
           : 'Test started in simulation mode; no physical fan command was sent.';
@@ -472,13 +485,16 @@
 
     async function stopTest() {
       try {
+        testStateRevision++;
         const result = await requestJson(API.stop, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: '{}'
         });
+        testStateRevision++;
         updateTunnelStatus(result);
         setRunning(false);
+        disconnectMeasurementSocket();
         $('setupMessage').textContent = 'Test stopped. Results remain visible until the next test starts.';
       } catch (error) {
         $('setupMessage').textContent = `Could not stop test: ${error.message}`;
@@ -615,15 +631,28 @@
     }
 
     function connectMeasurementSocket() {
+      measurementSocketWanted = true;
       if (measurementSocket &&
           (measurementSocket.readyState === WebSocket.OPEN ||
            measurementSocket.readyState === WebSocket.CONNECTING)) return;
+      clearTimeout(measurementReconnectTimer);
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      measurementSocket = new WebSocket(`${protocol}//${location.host}/api/ws`);
-      measurementSocket.addEventListener('open', () => {
+      let socket;
+      try {
+        socket = new WebSocket(`${protocol}//${location.host}/api/ws`);
+      } catch (error) {
+        $('measurementState').textContent =
+          `Measurement socket unavailable: ${error.message}`;
+        scheduleMeasurementReconnect();
+        return;
+      }
+      measurementSocket = socket;
+      socket.addEventListener('open', () => {
+        if (measurementSocket !== socket) return;
         if (running) $('measurementState').textContent = 'Test active · live socket';
       });
-      measurementSocket.addEventListener('message', event => {
+      socket.addEventListener('message', event => {
+        if (measurementSocket !== socket) return;
         try {
           const batch = JSON.parse(event.data);
           if (!Array.isArray(batch)) throw new Error('Expected a sample batch');
@@ -639,17 +668,30 @@
           $('measurementState').textContent = `Invalid measurement stream data: ${error.message}`;
         }
       });
-      measurementSocket.addEventListener('error', () => {
+      socket.addEventListener('error', () => {
+        if (measurementSocket !== socket) return;
         if (running) $('measurementState').textContent = 'Measurement socket reconnecting…';
       });
-      measurementSocket.addEventListener('close', () => {
+      socket.addEventListener('close', () => {
+        if (measurementSocket !== socket) return;
+        measurementSocket = null;
+        if (!measurementSocketWanted) return;
         if (running) $('measurementState').textContent = 'Measurement socket reconnecting…';
-        clearTimeout(measurementReconnectTimer);
-        measurementReconnectTimer = setTimeout(connectMeasurementSocket, 2000);
+        scheduleMeasurementReconnect();
       });
     }
 
+    function disconnectMeasurementSocket() {
+      measurementSocketWanted = false;
+      clearTimeout(measurementReconnectTimer);
+      measurementReconnectTimer = null;
+      const socket = measurementSocket;
+      measurementSocket = null;
+      if (socket && socket.readyState < WebSocket.CLOSING) socket.close();
+    }
+
     async function refreshStatus() {
+      const revision = testStateRevision;
       try {
         const status = await requestJson(
           `${API.status}?object=${encodeURIComponent($('object').value)}`,
@@ -666,7 +708,11 @@
         $('overviewSetpoint').textContent = Number(status.setpoint).toFixed(1);
         $('overviewTeam').textContent = status.team || '—';
         $('overviewObject').textContent = status.running ? status.object : '—';
-        setRunning(Boolean(status.running));
+        if (revision === testStateRevision) {
+          setRunning(Boolean(status.running));
+          if (status.running) connectMeasurementSocket();
+          else disconnectMeasurementSocket();
+        }
         refreshTunnelStatus();
       } catch (error) {
         $('connectionText').textContent = 'ESP32 unavailable';
@@ -958,7 +1004,6 @@
     updateSteadyStateToleranceUnit();
     updateMeasurementVisibility();
     window.addEventListener('resize', drawChart);
-    connectMeasurementSocket();
     refreshStatus();
     refreshTeams();
     setInterval(refreshStatus, 2000);
