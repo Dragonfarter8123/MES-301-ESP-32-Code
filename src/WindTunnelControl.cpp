@@ -89,6 +89,7 @@ bool initializeDAC() {
     return true;
   }
 
+  delay(Config::DacStartupDelayMs);
   if (!dacBusStarted) {
     dacBusStarted = dacWire.begin(Config::DacI2cSdaPin,
                                   Config::DacI2cSclPin);
@@ -106,6 +107,38 @@ bool initializeDAC() {
   portEXIT_CRITICAL(&controlMux);
   xSemaphoreGive(dacMutex);
   return connected;
+}
+
+bool scanDACI2cBus(I2cBusScanResult &result) {
+  result = I2cBusScanResult{};
+  if (dacMutex == nullptr ||
+      xSemaphoreTake(dacMutex, portMAX_DELAY) != pdTRUE) {
+    return false;
+  }
+
+  if (!dacBusStarted) {
+    dacBusStarted = dacWire.begin(Config::DacI2cSdaPin,
+                                  Config::DacI2cSclPin);
+  }
+  result.busReady = dacBusStarted;
+  if (result.busReady) {
+    for (uint8_t address = 0x03; address <= 0x77; ++address) {
+      dacWire.beginTransmission(address);
+      const uint8_t error = dacWire.endTransmission();
+      if (error == 0) {
+        if (result.deviceCount < sizeof(result.deviceAddresses)) {
+          result.deviceAddresses[result.deviceCount++] = address;
+        } else {
+          result.overflow = true;
+        }
+      } else if (error != 2) {
+        result.scanError = true;
+      }
+    }
+  }
+
+  xSemaphoreGive(dacMutex);
+  return result.busReady;
 }
 
 bool setDACVoltage(float voltage) {

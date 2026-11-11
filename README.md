@@ -129,16 +129,16 @@ The DAC is the **DFRobot DFR0971 (GP8403)**, a 12-bit, 0–10 V I2C DAC. The
 official `DFRobot_GP8403` library is included through PlatformIO and accepts a
 custom `TwoWire` pointer. The ADS1115 remains on the existing `Wire` bus at
 GPIO21/GPIO22, address `0x48`. The DAC uses a separate `TwoWire(1)` bus on
-GPIO18/GPIO19 (SDA/SCL), address `0x58`, and VOUT0 only. Its driver uses the
-library's millivolt-valued voltage setter; the library maps that to its 12-bit
-command.
+GPIO26/GPIO27 (SDA/SCL), configured address `0x5F`, and VOUT0 only. Its
+driver uses the library's millivolt-valued voltage setter; the library maps
+that to its 12-bit command. The DFRobot library defaults to `0x58`, so use
+`0x5F` only if the module's address has been configured to match.
 The firmware never calls the library's nonvolatile `store()` method.
 
-On a classic ESP32-WROOM-32, GPIO18 and GPIO19 can be used as general-purpose
-pins when no SPI peripheral uses them; they are the default VSPI SCK and MISO
-pins. The current project does not use SPI, but verify the module marking,
-board schematic, and any attached peripherals before wiring. Connect the DAC
-digital `SDA`, `SCL`, `+`/VCC, and `-`/GND to GPIO18, GPIO19, a regulated
+On a classic ESP32-WROOM-32, GPIO26 and GPIO27 are available as general-purpose
+pins; this project does not use them for another peripheral. Verify the module
+marking and board schematic before wiring. Connect the DAC digital `SDA`,
+`SCL`, `+`/VCC, and `-`/GND to GPIO26, GPIO27, a regulated
 supply supported by the DAC board and ESP32 power budget, and common ground.
 The DFRobot example powers it at 3.3 V; confirm the DAC board's power demand
 and your ESP32 board's available 3.3 V current first. Never connect VOUT0 or
@@ -155,20 +155,25 @@ The hardware emergency stop must remain independent of the ESP32.
 ### Isolated DAC bench test
 
 1. Leave the H-6910 disconnected from both DAC output channels.
-2. Verify GPIO18/19 and power/ground wiring. On the `dac-bench-test` branch,
+2. Verify GPIO26/27 and power/ground wiring. On the `dac-bench-test` branch,
    `DacBenchTestEnabled` is already `true`; keep
    `TunnelHardwareControlEnabled = false`.
-3. Build and upload the firmware. Startup only initializes and configures
-   the DAC; it does not automatically command a test voltage.
-4. Open **DAC Test**, select a 0, 2, 5, 7, or 9 V preset, or enter a custom
-   voltage from 0 to 10 V, then press **Set VOUT0**. Measure VOUT0 relative
-   to DAC GND with a multimeter.
-5. Compare the meter reading with the displayed command. The firmware cannot
-   verify actual analog output voltage; record the measured values yourself.
-6. Press **Return to 0 V** and confirm the reading with the meter. Keep the
+3. Build and upload the firmware. The DAC bus waits 500 ms before
+   initialization to let its external supply stabilize. Startup only
+   initializes and configures the DAC; it does not automatically command a
+   test voltage.
+4. Open **DAC Test** and click **Scan both I²C buses**. Expect the ADS1115 at
+   `0x48` on GPIO21/22 and the DFR0971 at `0x5F` on GPIO26/27.
+5. Select a 0, 2, 5, 7, or 9 V preset, or enter a custom voltage from 0 to
+   10 V, then press **Set VOUT0**. Measure VOUT0 relative to DAC GND with a
+   multimeter.
+6. Compare the meter reading with the displayed command. The GP8403 DAC has
+   no analog output readback, so the firmware cannot verify actual VOUT0;
+   record the measured values yourself.
+7. Press **Return to 0 V** and confirm the reading with the meter. Keep the
    H-6910 disconnected; 0 V here is only a bench command and is not certified
    as the tunnel's safe-stop condition.
-7. Set `DacBenchTestEnabled = false` after bench testing.
+8. Set `DacBenchTestEnabled = false` after bench testing.
 
 The **Manual Control** page can send a manually entered 0–10 V command through
 the DAC; it does not bypass the DAC or directly control the H-6910. The page's
@@ -193,7 +198,8 @@ Tunnel API: `POST /api/tunnel/set-speed` with
 commanded voltage, and voltage measurement verification. Commanding the DAC
 does not verify its physical output.
 `GET /api/inputs/raw` returns the current ADS1115 raw counts and voltages for
-the live read-only monitor.
+the live read-only monitor. `GET /api/i2c/scan` scans addresses `0x03`–`0x77`
+on the ADS1115 and DAC buses and reports the devices found on each.
 
 ## Build, upload, and run
 

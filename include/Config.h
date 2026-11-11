@@ -42,11 +42,12 @@ constexpr float MaxTunnelSpeedMph = 40.0f;
 constexpr float TunnelSpeedStepMph = 0.5f;
 constexpr uint32_t TunnelStabilizationPeriodMs = 8200;
 
-constexpr int DacI2cSdaPin = 18;
-constexpr int DacI2cSclPin = 19;
-constexpr uint8_t DacI2cAddress = 0x58;
+constexpr int DacI2cSdaPin = 26;
+constexpr int DacI2cSclPin = 27;
+constexpr uint8_t DacI2cAddress = 0x5F;
 constexpr uint8_t DacOutputChannel = 0;
 constexpr float DacOutputRangeVolts = 10.0f;
+constexpr uint32_t DacStartupDelayMs = 500;
 
 // Tunnel hardware control stays disabled; this branch enables isolated DAC tests.
 constexpr bool TunnelHardwareControlEnabled = false;

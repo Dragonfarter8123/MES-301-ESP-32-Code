@@ -19,6 +19,14 @@ struct WindTunnelControlStatus {
   float commandedDacVoltage;
 };
 
+struct I2cBusScanResult {
+  bool busReady;
+  bool scanError;
+  bool overflow;
+  uint8_t deviceCount;
+  uint8_t deviceAddresses[32];
+};
+
 void initializeWindTunnelControl();
 void updateWindTunnelControl();
 bool setWindTunnelTargetSpeed(float mph, const char **error);
@@ -26,6 +34,7 @@ bool updateWindTunnelTargetSpeedDuringTest(float mph, const char **error);
 bool startWindTunnelControl(const char **error);
 bool stopWindTunnelControl(const char **error);
 bool initializeDAC();
+bool scanDACI2cBus(I2cBusScanResult &result);
 bool setDACVoltage(float voltage);
 bool disableDACOutput();
 bool isDACConnected();

@@ -5,6 +5,7 @@
 #include <ESPAsyncWebServer.h>
 #include <SPIFFS.h>
 #include <WiFi.h>
+#include <Wire.h>
 #include <cstdlib>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
@@ -514,6 +515,54 @@ void sendError(AsyncWebServerRequest *request, int status,
   sendJson(request, status, response);
 }
 
+I2cBusScanResult scanI2cBus(TwoWire &bus) {
+  I2cBusScanResult result{};
+  result.busReady = bus.begin();
+  if (!result.busReady) {
+    return result;
+  }
+
+  for (uint8_t address = 0x03; address <= 0x77; ++address) {
+    bus.beginTransmission(address);
+    const uint8_t error = bus.endTransmission();
+    if (error == 0) {
+      if (result.deviceCount < sizeof(result.deviceAddresses)) {
+        result.deviceAddresses[result.deviceCount++] = address;
+      } else {
+        result.overflow = true;
+      }
+    } else if (error != 2) {
+      result.scanError = true;
+    }
+  }
+  return result;
+}
+
+bool scanContainsAddress(const I2cBusScanResult &scan, uint8_t address) {
+  for (uint8_t i = 0; i < scan.deviceCount; ++i) {
+    if (scan.deviceAddresses[i] == address) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void addI2cScanResult(JsonObject busDocument,
+                      const I2cBusScanResult &scan, int sdaPin, int sclPin) {
+  busDocument["ready"] = scan.busReady;
+  busDocument["sdaPin"] = sdaPin;
+  busDocument["sclPin"] = sclPin;
+  busDocument["scanError"] = scan.scanError;
+  busDocument["overflow"] = scan.overflow;
+  JsonArray devices = busDocument["devices"].to<JsonArray>();
+  for (uint8_t i = 0; i < scan.deviceCount; ++i) {
+    char address[7];
+    snprintf(address, sizeof(address), "0x%02X",
+             scan.deviceAddresses[i]);
+    devices.add(address);
+  }
+}
+
 void addTunnelStatus(JsonDocument &response) {
   const WindTunnelControlStatus status = getWindTunnelControlStatus();
   char dacAddress[7];
@@ -883,6 +932,34 @@ void handleRawInputs(AsyncWebServerRequest *request) {
   response["dragValid"] = readings.drag.valid;
   response["dragRaw"] = readings.drag.raw;
   response["dragVolts"] = readings.drag.volts;
+  sendJson(request, 200, response);
+}
+
+void handleI2cScan(AsyncWebServerRequest *request) {
+  const bool dacInitialized = initializeDAC();
+  const I2cBusScanResult adsScan = scanI2cBus(Wire);
+  I2cBusScanResult dacScan{};
+  const bool dacBusReady = scanDACI2cBus(dacScan);
+
+  JsonDocument response;
+  response["scanRange"] = "0x03-0x77";
+  response["adsExpectedAddress"] = Config::AdsAddress;
+  response["adsExpectedFound"] =
+      scanContainsAddress(adsScan, Config::AdsAddress);
+  response["dacExpectedAddress"] = Config::DacI2cAddress;
+  response["dacExpectedFound"] =
+      scanContainsAddress(dacScan, Config::DacI2cAddress);
+  response["dacInitialized"] = dacInitialized;
+  response["dacOutputReadbackAvailable"] = false;
+  JsonObject adsBus = response["adsBus"].to<JsonObject>();
+  addI2cScanResult(adsBus, adsScan, Config::I2cSdaPin,
+                   Config::I2cSclPin);
+  JsonObject dacBus = response["dacBus"].to<JsonObject>();
+  addI2cScanResult(dacBus, dacScan, Config::DacI2cSdaPin,
+                   Config::DacI2cSclPin);
+  if (!dacBusReady) {
+    response["dacBus"]["ready"] = false;
+  }
   sendJson(request, 200, response);
 }
 
@@ -1284,6 +1361,7 @@ void configureRoutes() {
             nullptr, handleDacBenchOutput);
   server.on("/api/tunnel/bench-stop", HTTP_POST, handleDacBenchStop);
   server.on("/api/inputs/raw", HTTP_GET, handleRawInputs);
+  server.on("/api/i2c/scan", HTTP_GET, handleI2cScan);
   server.on("/api/teams", HTTP_GET, handleTeams);
   server.on("/api/teams", HTTP_POST, [](AsyncWebServerRequest *) {}, nullptr,
             handleCreateTeam);
