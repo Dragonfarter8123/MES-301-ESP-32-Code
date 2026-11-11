@@ -15,6 +15,7 @@ LoadCellReadings readings = {{0, 0.0f, false}, {0, 0.0f, false}, 0};
 bool adsConnected = false;
 char adsError[96] = "ADS1115 has not been initialized";
 portMUX_TYPE inputStatusMux = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE readingsMux = portMUX_INITIALIZER_UNLOCKED;
 uint32_t conversionStartedAt = 0;
 uint32_t lastPairCompletedAt = 0;
 uint32_t lastBeginAttemptAt = 0;
@@ -57,8 +58,10 @@ void startConversion(uint16_t mux, ConversionState state) {
 void conversionTimedOut() {
   setAdsConnected(false);
   setAdsError("ADS1115 conversion timed out");
+  portENTER_CRITICAL(&readingsMux);
   readings.lift.valid = false;
   readings.drag.valid = false;
+  portEXIT_CRITICAL(&readingsMux);
   conversionState = ConversionState::WaitingToStart;
 }
 }  // namespace
@@ -105,11 +108,15 @@ void updateLoadCellInputs() {
   if (ads.conversionComplete()) {
     const int16_t raw = ads.getLastConversionResults();
     if (conversionState == ConversionState::WaitingForLift) {
+      portENTER_CRITICAL(&readingsMux);
       readings.lift = {raw, ads.computeVolts(raw), true};
+      portEXIT_CRITICAL(&readingsMux);
       startConversion(dragMux(), ConversionState::WaitingForDrag);
     } else {
+      portENTER_CRITICAL(&readingsMux);
       readings.drag = {raw, ads.computeVolts(raw), true};
       ++readings.sequence;
+      portEXIT_CRITICAL(&readingsMux);
       lastPairCompletedAt = now;
       conversionState = ConversionState::WaitingToStart;
       setAdsConnected(true);
@@ -139,8 +146,13 @@ String getAdsError() {
   return String(copy);
 }
 
-LoadCellReadings getLoadCellReadings() { return readings; }
+LoadCellReadings getLoadCellReadings() {
+  portENTER_CRITICAL(&readingsMux);
+  const LoadCellReadings snapshot = readings;
+  portEXIT_CRITICAL(&readingsMux);
+  return snapshot;
+}
 
-SensorReading readLiftSensor() { return readings.lift; }
+SensorReading readLiftSensor() { return getLoadCellReadings().lift; }
 
-SensorReading readDragSensor() { return readings.drag; }
+SensorReading readDragSensor() { return getLoadCellReadings().drag; }

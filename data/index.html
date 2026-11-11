@@ -93,6 +93,8 @@
       <button class="active" data-page="overview" onclick="showPage('overview')">Overview</button>
       <button data-page="measurements" onclick="showPage('measurements')">Measurements</button>
       <button data-page="setup" onclick="showPage('setup')">Test Setup</button>
+      <button data-page="dac-test" onclick="showPage('dac-test')">DAC Test</button>
+      <button data-page="manual-control" onclick="showPage('manual-control')">Manual Control</button>
       <button data-page="calibration" onclick="showPage('calibration')">Calibration</button>
     </nav>
 
@@ -217,21 +219,6 @@
             </div>
             <div class="message" id="tunnelMessage" role="status">Simulation mode; no physical fan command is sent.</div>
           </div>
-          <div class="notice" id="dacBenchPanel" hidden>
-            <strong>DAC Bench Test</strong>
-            <div class="muted">Use only with the H-6910 disconnected. Confirm VOUT0 with a multimeter; the ESP32 cannot verify analog output voltage.</div>
-            <div class="actions" style="margin-top: 10px">
-              <select id="dacBenchVoltage" aria-label="Bench-test output voltage">
-                <option value="0">0 V</option>
-                <option value="2">2 V</option>
-                <option value="5">5 V</option>
-                <option value="7">7 V</option>
-                <option value="9">9 V</option>
-              </select>
-              <button id="dacBenchOutputBtn" onclick="setDacBenchVoltage()">Set VOUT0</button>
-              <button id="dacBenchStopBtn" onclick="stopDacBench()">Return to 0 V</button>
-            </div>
-          </div>
           <div class="form-grid two">
             <div>
               <label for="stabilizationSeconds">Maximum time at each speed (seconds)</label>
@@ -268,6 +255,86 @@
           </div>
           <div class="notice">Steady state requires both calibrated load-cell readings to stay within the configured force tolerance of their moving averages for the required duration. The sweep advances when steady state is reached or the per-speed timeout expires; a timeout does not indicate steady state.</div>
           <div class="message" id="setupMessage" role="status"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="dac-test">
+      <div class="card">
+        <h2>DAC Test</h2>
+        <div class="body">
+          <div class="notice" id="dacBenchPanel" hidden>
+            <strong>DFRobot GP8403 · VOUT0</strong>
+            <div class="muted">Keep the DAC output disconnected from the H-6910 during bench testing. Measure VOUT0 with a multimeter; the ESP32 cannot verify the analog output.</div>
+            <div class="actions" style="margin-top: 10px">
+              <button type="button" onclick="setDacPreset(0)">0 V</button>
+              <button type="button" onclick="setDacPreset(2)">2 V</button>
+              <button type="button" onclick="setDacPreset(5)">5 V</button>
+              <button type="button" onclick="setDacPreset(7)">7 V</button>
+              <button type="button" onclick="setDacPreset(9)">9 V</button>
+            </div>
+            <div class="form-grid two" style="margin-top: 14px">
+              <div>
+                <label for="dacTestVoltage">Custom output voltage (0–10 V)</label>
+                <input id="dacTestVoltage" type="number" min="0" max="10" step="0.01" value="0" required>
+              </div>
+              <div class="actions" style="align-self: end">
+                <button type="button" onclick="setDacTestVoltage()">Set VOUT0</button>
+                <button type="button" onclick="stopDacBench('dacTestMessage')">Return to 0 V</button>
+              </div>
+            </div>
+            <div class="message" id="dacTestMessage" role="status"></div>
+          </div>
+          <div class="notice" id="dacTestDisabled" hidden>
+            DAC bench testing is disabled in this firmware configuration.
+          </div>
+          <div class="rows">
+            <span>DAC connection</span><span class="value" id="dacTestConnection">Checking…</span>
+            <span>Last commanded voltage</span><span class="value" id="dacTestCommand">—</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="manual-control">
+      <div class="grid">
+        <div class="card">
+          <h2>Manual Control</h2>
+          <div class="body">
+            <div class="notice">
+              Manual voltage commands are still sent through DAC VOUT0; this is
+              not a hardware bypass. Keep the H-6910 disconnected during
+              testing, and verify output voltage with a multimeter.
+            </div>
+            <div id="manualDacPanel" hidden>
+              <label for="manualDacVoltage">Manual DAC voltage (0–10 V)</label>
+              <input id="manualDacVoltage" type="number" min="0" max="10" step="0.01" value="0" required>
+              <div class="actions" style="margin-top: 10px">
+                <button type="button" onclick="setManualDacVoltage()">Send Manual Voltage</button>
+                <button type="button" onclick="stopDacBench('manualControlMessage')">Return to 0 V</button>
+              </div>
+            </div>
+            <div class="notice" id="manualDacDisabled" hidden>
+              Manual DAC control is disabled in this firmware configuration.
+            </div>
+            <div class="message" id="manualControlMessage" role="status"></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Live Raw ADS1115 Data</h2>
+          <div class="body">
+            <p class="muted">Read-only live sensor data. Enabling this display does not change or inject ADC input values.</p>
+            <button id="rawDataToggleBtn" type="button" onclick="toggleRawData()">Enable Live Raw Data</button>
+            <div class="message" id="rawDataStatus" role="status">Live raw data is off.</div>
+            <div class="rows">
+              <span>ADS1115</span><span class="value" id="rawAdsStatus">—</span>
+              <span>Sample sequence</span><span class="value" id="rawSequence">—</span>
+              <span>Lift raw counts</span><span class="value" id="rawLiftCounts">—</span>
+              <span>Lift voltage</span><span class="value" id="rawLiftVolts">—</span>
+              <span>Drag raw counts</span><span class="value" id="rawDragCounts">—</span>
+              <span>Drag voltage</span><span class="value" id="rawDragVolts">—</span>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -322,6 +389,7 @@
       tunnelStatus: '/api/tunnel/status',
       dacBenchOutput: '/api/tunnel/bench-output',
       dacBenchStop: '/api/tunnel/bench-stop',
+      rawInputs: '/api/inputs/raw',
       teams: '/api/teams',
       selectTeam: '/api/team/select',
       calibration: '/api/calibration',
@@ -337,6 +405,9 @@
     let measurementSocketWanted = false;
     let testStateRevision = 0;
     let steadyToleranceUnit = 'N';
+    let rawDataEnabled = false;
+    let rawDataTimer = null;
+    let rawDataRequestActive = false;
 
     function forceUnitToNewtons(unit) {
       if (unit === 'lbf') return 4.4482216153;
@@ -526,25 +597,51 @@
         : 'Stopped';
       $('tunnelMessage').textContent = status.message ||
         'Simulation mode; no physical fan command is sent.';
-      $('dacBenchPanel').hidden = !status.dacBenchTestEnabled;
+      const benchEnabled = Boolean(status.dacBenchTestEnabled);
+      $('dacBenchPanel').hidden = !benchEnabled;
+      $('dacTestDisabled').hidden = benchEnabled;
+      $('manualDacPanel').hidden = !benchEnabled;
+      $('manualDacDisabled').hidden = benchEnabled;
+      $('dacTestConnection').textContent = status.dacConnected
+        ? `Connected (${status.dacType || 'DAC'} ${status.dacAddress || ''})`
+        : 'Unavailable';
+      $('dacTestCommand').textContent = status.commandedVoltage !== null &&
+        status.commandedVoltage !== undefined && Number.isFinite(Number(status.commandedVoltage))
+        ? `${Number(status.commandedVoltage).toFixed(3)} V`
+        : 'No command';
     }
 
-    async function setDacBenchVoltage() {
+    async function sendDacVoltage(inputId, messageId) {
+      const input = $(inputId);
+      if (!input.reportValidity()) return;
       try {
         const status = await requestJson(API.dacBenchOutput, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ voltage: Number($('dacBenchVoltage').value) })
+          body: JSON.stringify({ voltage: Number(input.value) })
         });
         updateTunnelStatus(status);
-        $('tunnelMessage').textContent =
-          'VOUT0 command sent; verify the voltage using a multimeter. Keep the tunnel disconnected.';
+        $(messageId).textContent =
+          `VOUT0 command sent (${Number(input.value).toFixed(2)} V); verify with a multimeter and keep the tunnel disconnected.`;
       } catch (error) {
-        $('tunnelMessage').textContent = `DAC bench command failed: ${error.message}`;
+        $(messageId).textContent = `DAC command failed: ${error.message}`;
       }
     }
 
-    async function stopDacBench() {
+    function setDacPreset(voltage) {
+      $('dacTestVoltage').value = String(voltage);
+      sendDacVoltage('dacTestVoltage', 'dacTestMessage');
+    }
+
+    function setDacTestVoltage() {
+      sendDacVoltage('dacTestVoltage', 'dacTestMessage');
+    }
+
+    function setManualDacVoltage() {
+      sendDacVoltage('manualDacVoltage', 'manualControlMessage');
+    }
+
+    async function stopDacBench(messageId) {
       try {
         const status = await requestJson(API.dacBenchStop, {
           method: 'POST',
@@ -552,10 +649,63 @@
           body: '{}'
         });
         updateTunnelStatus(status);
-        $('tunnelMessage').textContent =
+        $(messageId).textContent =
           '0 V bench command sent; confirm VOUT0 with a multimeter. This does not verify a safe fan stop.';
       } catch (error) {
-        $('tunnelMessage').textContent = `DAC bench stop failed: ${error.message}`;
+        $(messageId).textContent = `DAC return-to-zero command failed: ${error.message}`;
+      }
+    }
+
+    function toggleRawData() {
+      rawDataEnabled = !rawDataEnabled;
+      $('rawDataToggleBtn').textContent = rawDataEnabled
+        ? 'Disable Live Raw Data'
+        : 'Enable Live Raw Data';
+      if (rawDataEnabled) {
+        $('rawDataStatus').textContent = 'Connecting to the ADS1115…';
+        refreshRawInputs();
+        rawDataTimer = setInterval(refreshRawInputs, 250);
+        return;
+      }
+
+      clearInterval(rawDataTimer);
+      rawDataTimer = null;
+      $('rawDataStatus').textContent = 'Live raw data is off.';
+      $('rawAdsStatus').textContent = '—';
+      $('rawSequence').textContent = '—';
+      $('rawLiftCounts').textContent = '—';
+      $('rawLiftVolts').textContent = '—';
+      $('rawDragCounts').textContent = '—';
+      $('rawDragVolts').textContent = '—';
+    }
+
+    async function refreshRawInputs() {
+      if (!rawDataEnabled || rawDataRequestActive) return;
+      rawDataRequestActive = true;
+      try {
+        const data = await requestJson(API.rawInputs, { cache: 'no-store' });
+        if (!rawDataEnabled) return;
+        $('rawAdsStatus').textContent = data.adsAvailable
+          ? 'Connected'
+          : (data.adsError || 'Disconnected');
+        $('rawSequence').textContent = String(data.sequence);
+        $('rawLiftCounts').textContent = data.liftValid ? String(data.liftRaw) : '—';
+        $('rawLiftVolts').textContent = data.liftValid
+          ? `${Number(data.liftVolts).toFixed(6)} V`
+          : '—';
+        $('rawDragCounts').textContent = data.dragValid ? String(data.dragRaw) : '—';
+        $('rawDragVolts').textContent = data.dragValid
+          ? `${Number(data.dragVolts).toFixed(6)} V`
+          : '—';
+        $('rawDataStatus').textContent = data.adsAvailable
+          ? 'Showing live, read-only ADS1115 input data.'
+          : 'ADS1115 input data is unavailable.';
+      } catch (error) {
+        if (rawDataEnabled) {
+          $('rawDataStatus').textContent = `Could not read ADS1115 data: ${error.message}`;
+        }
+      } finally {
+        rawDataRequestActive = false;
       }
     }
 

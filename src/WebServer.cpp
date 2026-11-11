@@ -871,6 +871,21 @@ void handleTunnelStatus(AsyncWebServerRequest *request) {
   sendJson(request, 200, response);
 }
 
+void handleRawInputs(AsyncWebServerRequest *request) {
+  const LoadCellReadings readings = getLoadCellReadings();
+  JsonDocument response;
+  response["adsAvailable"] = isAdsConnected();
+  response["adsError"] = getAdsError();
+  response["sequence"] = readings.sequence;
+  response["liftValid"] = readings.lift.valid;
+  response["liftRaw"] = readings.lift.raw;
+  response["liftVolts"] = readings.lift.volts;
+  response["dragValid"] = readings.drag.valid;
+  response["dragRaw"] = readings.drag.raw;
+  response["dragVolts"] = readings.drag.volts;
+  sendJson(request, 200, response);
+}
+
 void handleCalibration(AsyncWebServerRequest *request) {
   const String object = request->hasParam("object")
                             ? request->getParam("object")->value()
@@ -1268,6 +1283,7 @@ void configureRoutes() {
   server.on("/api/tunnel/bench-output", HTTP_POST, [](AsyncWebServerRequest *) {},
             nullptr, handleDacBenchOutput);
   server.on("/api/tunnel/bench-stop", HTTP_POST, handleDacBenchStop);
+  server.on("/api/inputs/raw", HTTP_GET, handleRawInputs);
   server.on("/api/teams", HTTP_GET, handleTeams);
   server.on("/api/teams", HTTP_POST, [](AsyncWebServerRequest *) {}, nullptr,
             handleCreateTeam);

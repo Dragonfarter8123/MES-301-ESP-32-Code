@@ -103,10 +103,13 @@ until steady state is reached or its configured maximum wait expires. The
 final speed is held for the same condition. The whole sweep is limited to one
 hour. **Apply Speed**
 calculates the estimated RPM and voltage without sending a DAC command. Start
-Test runs the sweep; Stop Test stops it. The default is simulation mode:
-`TunnelHardwareControlEnabled`, `TunnelSafetyPrerequisitesVerified`,
-`TunnelSafeStopVerified`, and `DacBenchTestEnabled` are all false. In this
-mode no DAC command is sent and no physical wind-tunnel control is possible.
+Test runs the sweep; Stop Test stops it. Wind-tunnel hardware control is
+disabled by default:
+`TunnelHardwareControlEnabled`, `TunnelSafetyPrerequisitesVerified`, and
+`TunnelSafeStopVerified` are false. On the `dac-bench-test` branch,
+`DacBenchTestEnabled` is true to expose the isolated bench controls. Startup
+only initializes the DAC; a voltage is sent only after an explicit dashboard
+command. Physical wind-tunnel control remains unavailable.
 Displayed windspeed is estimated using the tunnel's calibrated
 windspeed-to-fan-speed interpolation (reported fit `R² = 1`). In simulation
 mode this is the requested calibrated setpoint, not a physical output reading.
@@ -126,15 +129,16 @@ The DAC is the **DFRobot DFR0971 (GP8403)**, a 12-bit, 0–10 V I2C DAC. The
 official `DFRobot_GP8403` library is included through PlatformIO and accepts a
 custom `TwoWire` pointer. The ADS1115 remains on the existing `Wire` bus at
 GPIO21/GPIO22, address `0x48`. The DAC uses a separate `TwoWire(1)` bus on
-GPIO16/GPIO17, address `0x58`, and VOUT0 only. Its driver uses the library's
-millivolt-valued voltage setter; the library maps that to its 12-bit command.
+GPIO18/GPIO19 (SDA/SCL), address `0x58`, and VOUT0 only. Its driver uses the
+library's millivolt-valued voltage setter; the library maps that to its 12-bit
+command.
 The firmware never calls the library's nonvolatile `store()` method.
 
-On a classic ESP32-WROOM-32, GPIO16 and GPIO17 can be used as general-purpose
-pins when no other peripheral uses them. They are used for PSRAM on some
-ESP32-WROVER modules, so verify the module marking and board schematic before
-wiring. The current project has no other GPIO16/17 users. Connect the DAC
-digital `SDA`, `SCL`, `+`/VCC, and `-`/GND to GPIO16, GPIO17, a regulated
+On a classic ESP32-WROOM-32, GPIO18 and GPIO19 can be used as general-purpose
+pins when no SPI peripheral uses them; they are the default VSPI SCK and MISO
+pins. The current project does not use SPI, but verify the module marking,
+board schematic, and any attached peripherals before wiring. Connect the DAC
+digital `SDA`, `SCL`, `+`/VCC, and `-`/GND to GPIO18, GPIO19, a regulated
 supply supported by the DAC board and ESP32 power budget, and common ground.
 The DFRobot example powers it at 3.3 V; confirm the DAC board's power demand
 and your ESP32 board's available 3.3 V current first. Never connect VOUT0 or
@@ -151,13 +155,14 @@ The hardware emergency stop must remain independent of the ESP32.
 ### Isolated DAC bench test
 
 1. Leave the H-6910 disconnected from both DAC output channels.
-2. Verify GPIO16/17 and power/ground wiring, then set
-   `DacBenchTestEnabled = true` in `include/Config.h` (leave
-   `TunnelHardwareControlEnabled = false`).
+2. Verify GPIO18/19 and power/ground wiring. On the `dac-bench-test` branch,
+   `DacBenchTestEnabled` is already `true`; keep
+   `TunnelHardwareControlEnabled = false`.
 3. Build and upload the firmware. Startup only initializes and configures
    the DAC; it does not automatically command a test voltage.
-4. Open **Test Setup**, select 0, 2, 5, 7, or 9 V in **DAC Bench Test**, and
-   press **Set VOUT0**. Measure VOUT0 relative to DAC GND with a multimeter.
+4. Open **DAC Test**, select a 0, 2, 5, 7, or 9 V preset, or enter a custom
+   voltage from 0 to 10 V, then press **Set VOUT0**. Measure VOUT0 relative
+   to DAC GND with a multimeter.
 5. Compare the meter reading with the displayed command. The firmware cannot
    verify actual analog output voltage; record the measured values yourself.
 6. Press **Return to 0 V** and confirm the reading with the meter. Keep the
@@ -165,10 +170,14 @@ The hardware emergency stop must remain independent of the ESP32.
    as the tunnel's safe-stop condition.
 7. Set `DacBenchTestEnabled = false` after bench testing.
 
-Bench mode is deliberately disabled in the committed configuration and only
-exposes the endpoint/UI when enabled. It cannot be used concurrently with
-hardware tunnel mode, and a normal tunnel test is blocked until bench mode is
-returned to 0 V and stopped.
+The **Manual Control** page can send a manually entered 0–10 V command through
+the DAC; it does not bypass the DAC or directly control the H-6910. The page's
+**Enable Live Raw Data** button polls and displays the actual ADS1115 raw counts
+and voltages. It is read-only and does not inject or override sensor readings.
+Bench controls are available only when `DacBenchTestEnabled` is true and
+`TunnelHardwareControlEnabled` is false. Bench commands cannot be used
+concurrently with hardware tunnel mode, and a normal tunnel test is blocked
+until bench mode is returned to 0 V and stopped.
 
 Team API: `GET /api/teams`, `POST /api/teams` with `{"name":"Team name"}`,
 and `POST /api/team/select` with `{"name":"Team name"}`. Calibration status is
@@ -179,10 +188,12 @@ containing `startWeightGrams`, `endWeightGrams`, `incrementGrams`, and a
 Tunnel API: `POST /api/tunnel/set-speed` with
 `{"targetSpeedMph":30}`, `POST /api/tunnel/start`, `POST /api/tunnel/stop`,
 `GET /api/tunnel/status`, and the config-gated bench routes
-`POST /api/tunnel/bench-output` with `{"voltage":5}` and
+`POST /api/tunnel/bench-output` with `{"voltage":5}` (any 0–10 V value) and
 `POST /api/tunnel/bench-stop`. Status distinguishes calculated voltage,
 commanded voltage, and voltage measurement verification. Commanding the DAC
 does not verify its physical output.
+`GET /api/inputs/raw` returns the current ADS1115 raw counts and voltages for
+the live read-only monitor.
 
 ## Build, upload, and run
 

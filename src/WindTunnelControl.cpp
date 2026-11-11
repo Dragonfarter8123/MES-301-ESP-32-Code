@@ -162,14 +162,6 @@ float getCommandedDACVoltage() {
 }
 
 bool setDACBenchTestVoltage(float voltage, const char **error) {
-  constexpr float testVoltages[] = {0.0f, 2.0f, 5.0f, 7.0f, 9.0f};
-  bool supportedVoltage = false;
-  for (float testVoltage : testVoltages) {
-    if (fabsf(voltage - testVoltage) < 0.001f) {
-      supportedVoltage = true;
-      break;
-    }
-  }
   if (!Config::DacBenchTestEnabled ||
       Config::TunnelHardwareControlEnabled) {
     if (error != nullptr) {
@@ -177,9 +169,10 @@ bool setDACBenchTestVoltage(float voltage, const char **error) {
     }
     return false;
   }
-  if (!supportedVoltage) {
+  if (!isfinite(voltage) || voltage < 0.0f ||
+      voltage > Config::DacOutputRangeVolts) {
     if (error != nullptr) {
-      *error = "Bench voltage must be one of 0, 2, 5, 7, or 9 V.";
+      *error = "Bench voltage must be between 0 and 10 V.";
     }
     return false;
   }
