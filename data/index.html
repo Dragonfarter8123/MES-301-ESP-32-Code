@@ -294,12 +294,12 @@
             <span>Analog output readback</span><span class="value">Not available; use a multimeter</span>
           </div>
           <div class="actions" style="margin-top: 12px">
-            <button id="i2cScanBtn" type="button" onclick="scanI2cBuses()">Scan both I²C buses</button>
+            <button id="i2cScanBtn" type="button" onclick="scanI2cBus()">Scan both I²C buses</button>
           </div>
           <div class="message" id="i2cScanStatus" role="status"></div>
           <div class="notice" id="i2cScanResults" style="white-space: pre-line" aria-live="polite">
-            ADS1115 bus: GPIO 21/22 · expected address 0x48
-            DAC bus: GPIO 26/27 · expected address 0x5F
+            ADS1115/display bus: GPIO 21/22 · expected 0x48/0x2C
+            DAC bus: GPIO 26/27 · expected 0x5F
           </div>
         </div>
       </div>
@@ -666,36 +666,38 @@
       }
     }
 
-    async function scanI2cBuses() {
+    async function scanI2cBus() {
       $('i2cScanBtn').disabled = true;
       $('i2cScanStatus').textContent =
         'Scanning addresses 0x03–0x77 on both I²C buses…';
       try {
         const result = await requestJson(API.i2cScan, { cache: 'no-store' });
-        const adsDevices = result.adsBus.devices.length
-          ? result.adsBus.devices.join(', ')
+        const sharedDevices = result.adsDisplayBus.devices.length
+          ? result.adsDisplayBus.devices.join(', ')
           : 'none found';
         const dacDevices = result.dacBus.devices.length
           ? result.dacBus.devices.join(', ')
           : 'none found';
         const scanLines = [
-          `ADS1115 bus GPIO ${result.adsBus.sdaPin}/${result.adsBus.sclPin}: ${adsDevices}`,
+          `ADS1115/display bus GPIO ${result.adsDisplayBus.sdaPin}/${result.adsDisplayBus.sclPin}: ${sharedDevices}`,
           `Expected 0x${Number(result.adsExpectedAddress).toString(16).padStart(2, '0')} ${result.adsExpectedFound ? 'found' : 'NOT FOUND'}`,
+          `DFR0997 address 0x${Number(result.displayAddress).toString(16).padStart(2, '0')} ${result.displayAddressFound ? 'found' : 'NOT FOUND'}`,
           `DAC bus GPIO ${result.dacBus.sdaPin}/${result.dacBus.sclPin}: ${dacDevices}`,
-          `Expected 0x${Number(result.dacExpectedAddress).toString(16).padStart(2, '0')} ${result.dacExpectedFound ? 'found' : 'NOT FOUND'}`,
+          `Expected DAC 0x${Number(result.dacExpectedAddress).toString(16).padStart(2, '0')} ${result.dacExpectedFound ? 'found' : 'NOT FOUND'}`,
           `DFR0971 driver initialization: ${result.dacInitialized ? 'success' : 'failed'}`,
+          `DFR0997 display initialization: ${result.displayInitialized ? 'detected' : 'NOT DETECTED'}`,
           'DAC analog output cannot be read over I²C; measure VOUT0 with a multimeter.'
         ];
-        if (result.adsBus.scanError || result.dacBus.scanError) {
+        if (result.adsDisplayBus.scanError || result.dacBus.scanError) {
           scanLines.push('One or more I²C scan transactions failed.');
         }
-        if (result.adsBus.overflow || result.dacBus.overflow) {
+        if (result.adsDisplayBus.overflow || result.dacBus.overflow) {
           scanLines.push('More than 32 devices found on a bus; displayed addresses are truncated.');
         }
         $('i2cScanResults').textContent = scanLines.join('\n');
-        $('i2cScanStatus').textContent = !result.adsBus.ready || !result.dacBus.ready
+        $('i2cScanStatus').textContent = !result.adsDisplayBus.ready || !result.dacBus.ready
           ? 'One or both I²C buses could not be started.'
-          : result.adsBus.scanError || result.dacBus.scanError
+          : result.adsDisplayBus.scanError || result.dacBus.scanError
             ? 'I²C scan completed with bus errors; check wiring.'
             : 'I²C scan complete.';
         await refreshTunnelStatus();

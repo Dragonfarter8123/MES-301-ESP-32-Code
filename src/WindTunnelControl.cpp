@@ -94,8 +94,7 @@ bool initializeDAC() {
     dacBusStarted = dacWire.begin(Config::DacI2cSdaPin,
                                   Config::DacI2cSclPin);
   }
-  const bool initialized =
-      dacBusStarted && dac.begin() == 0;
+  const bool initialized = dacBusStarted && dac.begin() == 0;
   if (initialized) {
     dac.setDACOutRange(DFRobot_GP8403::eOutputRange10V);
     dacWire.beginTransmission(Config::DacI2cAddress);

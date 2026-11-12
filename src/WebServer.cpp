@@ -15,6 +15,7 @@
 
 #include "Calculations.h"
 #include "Config.h"
+#include "Display.h"
 #include "ESP10_Inputs.h"
 #include "WindTunnelControl.h"
 
@@ -937,22 +938,29 @@ void handleRawInputs(AsyncWebServerRequest *request) {
 
 void handleI2cScan(AsyncWebServerRequest *request) {
   const bool dacInitialized = initializeDAC();
-  const I2cBusScanResult adsScan = scanI2cBus(Wire);
+  const I2cBusScanResult adsDisplayScan = scanI2cBus(Wire);
   I2cBusScanResult dacScan{};
   const bool dacBusReady = scanDACI2cBus(dacScan);
+  const uint8_t displayAddress =
+      getIpDisplayI2cAddress() == 0 ? Config::DisplayI2cAddress
+                                    : getIpDisplayI2cAddress();
 
   JsonDocument response;
   response["scanRange"] = "0x03-0x77";
   response["adsExpectedAddress"] = Config::AdsAddress;
   response["adsExpectedFound"] =
-      scanContainsAddress(adsScan, Config::AdsAddress);
+      scanContainsAddress(adsDisplayScan, Config::AdsAddress);
   response["dacExpectedAddress"] = Config::DacI2cAddress;
   response["dacExpectedFound"] =
       scanContainsAddress(dacScan, Config::DacI2cAddress);
+  response["displayAddress"] = displayAddress;
+  response["displayAddressFound"] =
+      scanContainsAddress(adsDisplayScan, displayAddress);
   response["dacInitialized"] = dacInitialized;
+  response["displayInitialized"] = isIpDisplayInitialized();
   response["dacOutputReadbackAvailable"] = false;
-  JsonObject adsBus = response["adsBus"].to<JsonObject>();
-  addI2cScanResult(adsBus, adsScan, Config::I2cSdaPin,
+  JsonObject adsDisplayBus = response["adsDisplayBus"].to<JsonObject>();
+  addI2cScanResult(adsDisplayBus, adsDisplayScan, Config::I2cSdaPin,
                    Config::I2cSclPin);
   JsonObject dacBus = response["dacBus"].to<JsonObject>();
   addI2cScanResult(dacBus, dacScan, Config::DacI2cSdaPin,
@@ -1399,8 +1407,12 @@ void updateWebServer() {
   if (WiFi.status() == WL_CONNECTED && !wifiAddressPrinted) {
     Serial.print("Wi-Fi connected. Dashboard: http://");
     Serial.println(WiFi.localIP());
+    updateNetworkDisplay(WiFi.localIP().toString(), WiFi.SSID());
     wifiAddressPrinted = true;
   } else if (WiFi.status() != WL_CONNECTED) {
+    if (wifiAddressPrinted) {
+      updateNetworkDisplay("0.0.0.0", "Not connected");
+    }
     wifiAddressPrinted = false;
     if (strlen(WIFI_SSID) > 0 &&
         millis() - lastWifiAttemptAt >= 15000U) {

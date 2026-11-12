@@ -1,6 +1,7 @@
 #include <Arduino.h>
 
 #include "Calculations.h"
+#include "Display.h"
 #include "ESP10_Inputs.h"
 #include "WebServer.h"
 #include "WindTunnelControl.h"
@@ -10,6 +11,7 @@ void setup() {
   initializeLoadCellInputs();
   initializeMeasurements();
   initializeWindTunnelControl();
+  initializeIpDisplay();
   initializeWebServer();
 }
 

@@ -49,6 +49,11 @@ constexpr uint8_t DacOutputChannel = 0;
 constexpr float DacOutputRangeVolts = 10.0f;
 constexpr uint32_t DacStartupDelayMs = 500;
 
+constexpr int DisplayI2cSdaPin = I2cSdaPin;
+constexpr int DisplayI2cSclPin = I2cSclPin;
+constexpr uint8_t DisplayI2cAddress = 0x2C;
+constexpr uint32_t DisplayStartupDelayMs = 1000;
+
 // Tunnel hardware control stays disabled; this branch enables isolated DAC tests.
 constexpr bool TunnelHardwareControlEnabled = false;
 constexpr bool TunnelSafetyPrerequisitesVerified = false;

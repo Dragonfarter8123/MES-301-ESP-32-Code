@@ -127,22 +127,38 @@ timer is not evidence that the tunnel reached the requested speed.
 
 The DAC is the **DFRobot DFR0971 (GP8403)**, a 12-bit, 0–10 V I2C DAC. The
 official `DFRobot_GP8403` library is included through PlatformIO and accepts a
-custom `TwoWire` pointer. The ADS1115 remains on the existing `Wire` bus at
-GPIO21/GPIO22, address `0x48`. The DAC uses a separate `TwoWire(1)` bus on
-GPIO26/GPIO27 (SDA/SCL), configured address `0x5F`, and VOUT0 only. Its
-driver uses the library's millivolt-valued voltage setter; the library maps
-that to its 12-bit command. The DFRobot library defaults to `0x58`, so use
-`0x5F` only if the module's address has been configured to match.
-The firmware never calls the library's nonvolatile `store()` method.
+custom `TwoWire` pointer. The ADS1115 (`0x48`) and DFR0997 display (`0x2C`)
+share the existing `Wire` bus on GPIO21/GPIO22; connect their SDA and SCL
+signals in parallel to those pins. The DAC stays on its separate `TwoWire(1)`
+bus on GPIO26/GPIO27 (SDA/SCL), address `0x5F`. All three addresses are
+distinct. The DFRobot
+library defaults to `0x58`, so use `0x5F` only if the module's address has
+been configured to match. The driver accepts voltage in millivolts and maps
+that to the DAC's 12-bit command; the firmware never calls the library's
+nonvolatile `store()` method.
 
-On a classic ESP32-WROOM-32, GPIO26 and GPIO27 are available as general-purpose
-pins; this project does not use them for another peripheral. Verify the module
-marking and board schematic before wiring. Connect the DAC digital `SDA`,
-`SCL`, `+`/VCC, and `-`/GND to GPIO26, GPIO27, a regulated
-supply supported by the DAC board and ESP32 power budget, and common ground.
+The DFR0997 2-inch IPS display uses DFRobot's official `DFRobot_LcdDisplay`
+library on the ADS1115 bus: display D/SDA to GPIO21 and C/SCL to GPIO22,
+address `0x2C`. After a 1-second startup delay, the display shows only the
+ESP32 IP address and connected Wi-Fi network. The IP uses the library's
+largest documented text size (24 px); labels and network name use 12 px.
+Before Wi-Fi connects, it shows `0.0.0.0` and `Not connected`.
+At startup the firmware scans GPIO21/GPIO22, prefers the DFR0997 default
+address `0x2C`, and uses another responding address only when it is the sole
+non-ADS1115 device found. The serial monitor reports every responding address
+and the selected display address.
+
+For the DAC, connect digital `SDA` and `SCL`, `+`/VCC, and `-`/GND to the
+GPIO26/GPIO27 bus, a regulated supply supported by the DAC board and ESP32
+power budget, and common ground.
 The DFRobot example powers it at 3.3 V; confirm the DAC board's power demand
 and your ESP32 board's available 3.3 V current first. Never connect VOUT0 or
 VOUT1 to an ESP32 GPIO or the ADS1115.
+
+DFRobot's DFR0997 I2C example powers the display `+` pin from 5 V and connects
+`-` to common ground. Before wiring either module, confirm its I2C signal
+levels are safe for 3.3 V ESP32 GPIOs; use a suitable bidirectional level
+shifter if SDA or SCL pull-ups rise to 5 V. Do not connect 5 V to ESP32 GPIOs.
 
 Keep the DAC's analog VOUT0 disconnected from the H-6910 until the tunnel's
 analog input range, polarity, common reference, enable circuit, and safe-stop
@@ -155,7 +171,9 @@ The hardware emergency stop must remain independent of the ESP32.
 ### Isolated DAC bench test
 
 1. Leave the H-6910 disconnected from both DAC output channels.
-2. Verify GPIO26/27 and power/ground wiring. On the `dac-bench-test` branch,
+2. Verify the ADS1115/display GPIO21/22 bus, DAC GPIO26/27 bus, and their
+   power/ground wiring. On the
+   `dac-bench-test` branch,
    `DacBenchTestEnabled` is already `true`; keep
    `TunnelHardwareControlEnabled = false`.
 3. Build and upload the firmware. The DAC bus waits 500 ms before
@@ -163,7 +181,8 @@ The hardware emergency stop must remain independent of the ESP32.
    initializes and configures the DAC; it does not automatically command a
    test voltage.
 4. Open **DAC Test** and click **Scan both I²C buses**. Expect the ADS1115 at
-   `0x48` on GPIO21/22 and the DFR0971 at `0x5F` on GPIO26/27.
+   `0x48` and DFR0997 at `0x2C` on GPIO21/22, and the DFR0971 at `0x5F` on
+   GPIO26/27.
 5. Select a 0, 2, 5, 7, or 9 V preset, or enter a custom voltage from 0 to
    10 V, then press **Set VOUT0**. Measure VOUT0 relative to DAC GND with a
    multimeter.
@@ -199,7 +218,7 @@ commanded voltage, and voltage measurement verification. Commanding the DAC
 does not verify its physical output.
 `GET /api/inputs/raw` returns the current ADS1115 raw counts and voltages for
 the live read-only monitor. `GET /api/i2c/scan` scans addresses `0x03`–`0x77`
-on the ADS1115 and DAC buses and reports the devices found on each.
+on the ADS1115/display bus and separate DAC bus.
 
 ## Build, upload, and run
 
