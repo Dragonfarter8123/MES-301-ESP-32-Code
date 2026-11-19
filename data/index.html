@@ -315,7 +315,6 @@
       status: '/api/status',
       start: '/api/start',
       stop: '/api/stop',
-      rawInputs: '/api/inputs/raw',
       teams: '/api/teams',
       selectTeam: '/api/team/select',
       calibration: '/api/calibration',
@@ -340,8 +339,10 @@
     let hasUndownloadedTest = false;
     let steadyToleranceUnit = 'N';
     let realtimeActive = false;
-    let realtimeTimer = null;
-    let realtimeRequestActive = false;
+    let realtimeSocket = null;
+    let realtimeSocketWanted = false;
+    let realtimeReconnectTimer = null;
+    let dashboardFullyLoaded = document.readyState === 'complete';
     let realtimeSamples = [];
     let lastRealtimeSequence = null;
 
@@ -379,17 +380,15 @@
     function setRealtimeActive(active) {
       realtimeActive = active;
       if (active) {
-        $('realtimeDataStatus').textContent = 'Connecting to the ADS1115…';
-        refreshRealtimeInputs();
-        if (realtimeTimer === null) {
-          realtimeTimer = setInterval(refreshRealtimeInputs, 100);
-        }
+        realtimeSocketWanted = true;
+        $('realtimeStatus').textContent = 'Connecting to ADS1115 WebSocket…';
+        $('realtimeDataStatus').textContent = 'Waiting for the live measurement socket.';
+        connectRealtimeSocket();
         drawRealtimeChart();
         return;
       }
 
-      clearInterval(realtimeTimer);
-      realtimeTimer = null;
+      disconnectRealtimeSocket();
     }
 
     function updateMeasurementVisibility() {
@@ -533,53 +532,96 @@
       }
     }
 
-    async function refreshRealtimeInputs() {
-      if (!realtimeActive || realtimeRequestActive) return;
-      realtimeRequestActive = true;
-      try {
-        const data = await requestJson(API.rawInputs, { cache: 'no-store' });
-        if (!realtimeActive) return;
-        if (!data.adsAvailable || !data.liftValid || !data.dragValid) {
-          $('realtimeStatus').textContent = data.adsAvailable
-            ? 'Waiting for valid ADS1115 readings'
-            : 'ADS1115 disconnected';
-          $('realtimeDataStatus').textContent =
-            data.adsError || 'ADS1115 readings are unavailable.';
-          trimRealtimeSamples(Date.now());
-          drawRealtimeChart();
-          return;
-        }
-
-        $('realtimeStatus').textContent = 'ADS1115 connected · live';
-        $('realtimeLiftCounts').textContent = Number(data.liftRaw).toFixed(1);
-        $('realtimeDragCounts').textContent = Number(data.dragRaw).toFixed(1);
-        $('realtimeLiftVolts').textContent =
-          `${(Number(data.liftVolts) * 1000).toFixed(2)} mV`;
-        $('realtimeDragVolts').textContent =
-          `${(Number(data.dragVolts) * 1000).toFixed(2)} mV`;
+    function handleRealtimeInput(data) {
+      if (!realtimeActive) return;
+      if (!data.adsAvailable || !data.liftValid || !data.dragValid) {
+        $('realtimeStatus').textContent = data.adsAvailable
+          ? 'Waiting for valid ADS1115 readings'
+          : 'ADS1115 disconnected';
         $('realtimeDataStatus').textContent =
-          'Showing live ADS1115 readings; the graph retains the last 30 seconds.';
-        if (data.sequence !== lastRealtimeSequence) {
-          lastRealtimeSequence = data.sequence;
-          realtimeSamples.push({
-            time: Date.now(),
-            lift: Number(data.liftVolts) * 1000,
-            drag: Number(data.dragVolts) * 1000
-          });
-        }
+          data.adsError || 'ADS1115 readings are unavailable.';
         trimRealtimeSamples(Date.now());
         drawRealtimeChart();
-      } catch (error) {
-        if (realtimeActive) {
-          $('realtimeStatus').textContent = 'ADS1115 unavailable';
-          $('realtimeDataStatus').textContent =
-            `Could not read ADS1115 data: ${error.message}`;
-          trimRealtimeSamples(Date.now());
-          drawRealtimeChart();
-        }
-      } finally {
-        realtimeRequestActive = false;
+        return;
       }
+
+      $('realtimeStatus').textContent = 'ADS1115 connected · live WebSocket';
+      $('realtimeLiftCounts').textContent = Number(data.liftRaw).toFixed(1);
+      $('realtimeDragCounts').textContent = Number(data.dragRaw).toFixed(1);
+      $('realtimeLiftVolts').textContent =
+        `${(Number(data.liftVolts) * 1000).toFixed(2)} mV`;
+      $('realtimeDragVolts').textContent =
+        `${(Number(data.dragVolts) * 1000).toFixed(2)} mV`;
+      $('realtimeDataStatus').textContent =
+        'Live ADS1115 readings are streaming over WebSocket; graph shows the last 30 seconds.';
+      if (data.sequence !== lastRealtimeSequence) {
+        lastRealtimeSequence = data.sequence;
+        realtimeSamples.push({
+          time: Date.now(),
+          lift: Number(data.liftVolts) * 1000,
+          drag: Number(data.dragVolts) * 1000
+        });
+      }
+      trimRealtimeSamples(Date.now());
+      drawRealtimeChart();
+    }
+
+    function connectRealtimeSocket() {
+      if (!realtimeActive || !dashboardFullyLoaded) return;
+      if (realtimeSocket &&
+          (realtimeSocket.readyState === WebSocket.OPEN ||
+           realtimeSocket.readyState === WebSocket.CONNECTING)) return;
+      clearTimeout(realtimeReconnectTimer);
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      let socket;
+      try {
+        socket = new WebSocket(`${protocol}//${location.host}/api/inputs/ws`);
+      } catch (error) {
+        $('realtimeStatus').textContent =
+          `Measurement WebSocket unavailable: ${error.message}`;
+        scheduleRealtimeReconnect();
+        return;
+      }
+      realtimeSocket = socket;
+      socket.addEventListener('open', () => {
+        if (realtimeSocket !== socket) return;
+        $('realtimeStatus').textContent = 'WebSocket connected · waiting for ADS1115';
+      });
+      socket.addEventListener('message', event => {
+        if (realtimeSocket !== socket) return;
+        try {
+          handleRealtimeInput(JSON.parse(event.data));
+        } catch (error) {
+          $('realtimeStatus').textContent =
+            `Invalid real-time WebSocket data: ${error.message}`;
+        }
+      });
+      socket.addEventListener('error', () => {
+        if (realtimeSocket !== socket) return;
+        $('realtimeStatus').textContent = 'Measurement WebSocket reconnecting…';
+      });
+      socket.addEventListener('close', () => {
+        if (realtimeSocket !== socket) return;
+        realtimeSocket = null;
+        if (!realtimeSocketWanted) return;
+        $('realtimeStatus').textContent = 'Measurement WebSocket reconnecting…';
+        scheduleRealtimeReconnect();
+      });
+    }
+
+    function scheduleRealtimeReconnect() {
+      clearTimeout(realtimeReconnectTimer);
+      if (!realtimeSocketWanted || !realtimeActive) return;
+      realtimeReconnectTimer = setTimeout(connectRealtimeSocket, 1500);
+    }
+
+    function disconnectRealtimeSocket() {
+      realtimeSocketWanted = false;
+      clearTimeout(realtimeReconnectTimer);
+      realtimeReconnectTimer = null;
+      const socket = realtimeSocket;
+      realtimeSocket = null;
+      if (socket && socket.readyState < WebSocket.CLOSING) socket.close();
     }
 
     function displayForce(value) {
@@ -687,6 +729,7 @@
     }
 
     async function refreshStatus() {
+      if (realtimeActive) return;
       const revision = testStateRevision;
       try {
         const status = await requestJson(
@@ -1147,6 +1190,10 @@
 
     updateSteadyStateToleranceUnit();
     updateMeasurementVisibility();
+    window.addEventListener('load', () => {
+      dashboardFullyLoaded = true;
+      if (realtimeActive) connectRealtimeSocket();
+    }, { once: true });
     window.addEventListener('resize', () => {
       drawChart();
       drawRealtimeChart();

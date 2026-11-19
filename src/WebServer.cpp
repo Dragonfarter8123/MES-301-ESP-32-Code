@@ -87,6 +87,8 @@ constexpr char StationDataPath[] = "/station.json";
 
 AsyncWebServer server(80);
 AsyncWebSocket measurementSocket("/api/ws");
+AsyncWebSocket realtimeInputSocket("/api/inputs/ws");
+constexpr uint32_t RealtimeInputSendIntervalMs = 100U;
 SemaphoreHandle_t stateMutex = nullptr;
 TestSettings settings;
 std::vector<TeamRecord> teams;
@@ -99,6 +101,7 @@ uint32_t lastSampleAt = 0;
 uint32_t lastLoggedSequence = 0;
 uint32_t testStartSequence = 0;
 uint32_t lastWifiAttemptAt = 0;
+uint32_t lastRealtimeInputSentAt = 0;
 bool wifiAddressPrinted = false;
 bool spiffsMounted = false;
 String pendingMeasurementBatch;
@@ -948,6 +951,32 @@ void handleRawInputs(AsyncWebServerRequest *request) {
   sendJson(request, 200, response);
 }
 
+void broadcastRealtimeInputs() {
+  if (realtimeInputSocket.count() == 0) return;
+
+  const uint32_t now = millis();
+  if (now - lastRealtimeInputSentAt < RealtimeInputSendIntervalMs) return;
+  lastRealtimeInputSentAt = now;
+  if (!realtimeInputSocket.availableForWriteAll()) return;
+
+  const LoadCellReadings readings = getLoadCellReadings();
+  const bool adsAvailable = isAdsConnected();
+  JsonDocument response;
+  response["adsAvailable"] = adsAvailable;
+  response["adsError"] = getAdsError();
+  response["sequence"] = readings.sequence;
+  response["liftValid"] = readings.lift.valid;
+  response["liftRaw"] = readings.lift.raw;
+  response["liftVolts"] = readings.lift.volts;
+  response["dragValid"] = readings.drag.valid;
+  response["dragRaw"] = readings.drag.raw;
+  response["dragVolts"] = readings.drag.volts;
+
+  String message;
+  serializeJson(response, message);
+  realtimeInputSocket.textAll(message);
+}
+
 void handleI2cScan(AsyncWebServerRequest *request) {
   const bool dacInitialized = initializeDAC();
   const I2cBusScanResult adsDisplayScan = scanI2cBus(Wire);
@@ -1427,6 +1456,9 @@ void configureRoutes() {
   measurementSocket.enable(true);
   measurementSocket.cleanupClients();
   server.addHandler(&measurementSocket);
+  realtimeInputSocket.enable(true);
+  realtimeInputSocket.cleanupClients();
+  server.addHandler(&realtimeInputSocket);
   server.on("/api/start", HTTP_POST, [](AsyncWebServerRequest *) {}, nullptr,
             handleStart);
   server.on("/api/stop", HTTP_POST, handleStop);
@@ -1492,6 +1524,7 @@ void updateWebServer() {
   }
 
   const MeasurementValues values = getMeasurementValues();
+  broadcastRealtimeInputs();
   bool stopTunnel = false;
   const char *stopError = nullptr;
   if (!lockState()) {

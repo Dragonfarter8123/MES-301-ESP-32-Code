@@ -95,9 +95,10 @@ checking or per-speed advancement can occur. The sweep then advances on
 steady state or when the maximum time at that speed expires; a timeout does
 not claim stability. Calibration is required for this force-based criterion.
 
-The dashboard's **Real-Time Measurement** page polls the live ADS1115 data
-while open and graphs lift/drag output voltages over a rolling 30-second
-window. The **Run Test** page shows measurements collected during a test run.
+The dashboard's **Real-Time Measurement** page streams live ADS1115 data over
+a dedicated WebSocket while open and graphs lift/drag output voltages over a
+rolling 30-second window. The **Run Test** page shows measurements collected
+during a test run.
 Test CSV downloads include the captured setup values plus each logged
 unfiltered ADC count and voltage, corresponding filtered counts and voltages,
 and calibrated force when calibration is available. Starting another test
@@ -230,9 +231,12 @@ Tunnel API: `POST /api/tunnel/set-speed` with
 `POST /api/tunnel/bench-stop`. Status distinguishes calculated voltage,
 commanded voltage, and voltage measurement verification. Commanding the DAC
 does not verify its physical output.
-`GET /api/inputs/raw` returns current ADS1115 raw counts and voltages for the
-real-time monitor. `GET /api/i2c/scan` scans addresses `0x03`–`0x77` on the
-ADS1115/display bus and separate DAC bus.
+The Real-Time Measurement page opens a separate WebSocket at
+`/api/inputs/ws` after the page has fully loaded and only while that tab is
+active; it streams ADS1115 readings at 10 Hz without HTTP polling. The
+`/api/inputs/raw` HTTP endpoint remains available for diagnostics but is not
+used by the dashboard. `GET /api/i2c/scan` scans addresses `0x03`–`0x77` on
+the ADS1115/display bus and separate DAC bus.
 
 ## Build, upload, and run
 
