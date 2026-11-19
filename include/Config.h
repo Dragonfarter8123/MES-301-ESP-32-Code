@@ -42,6 +42,14 @@ constexpr float MaxTunnelSpeedMph = 40.0f;
 constexpr float TunnelSpeedStepMph = 0.5f;
 constexpr uint32_t TunnelStabilizationPeriodMs = 8200;
 
+constexpr float DefaultTestStartSpeedMph = 20.0f;
+constexpr float DefaultTestEndSpeedMph = 40.0f;
+constexpr float DefaultTestSpeedIncrementMph = 5.0f;
+constexpr uint32_t DefaultTestMaxSpeedSeconds = 120;
+constexpr uint32_t DefaultTunnelSettleSeconds = 5;
+constexpr uint16_t DefaultMovingAverageWindowMs = 5000;
+constexpr uint32_t DefaultSteadyStateHoldSeconds = 10;
+
 constexpr int DacI2cSdaPin = 26;
 constexpr int DacI2cSclPin = 27;
 constexpr uint8_t DacI2cAddress = 0x5F;

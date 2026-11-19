@@ -9,16 +9,12 @@
 #include <freertos/semphr.h>
 
 #include "Config.h"
+#include "DacCalibration.h"
 
 namespace {
 struct SpeedRpmPoint {
   float mph;
   float rpm;
-};
-
-struct RpmVoltagePoint {
-  float rpm;
-  float voltage;
 };
 
 constexpr SpeedRpmPoint SpeedRpmData[] = {
@@ -28,19 +24,8 @@ constexpr SpeedRpmPoint SpeedRpmData[] = {
     {39.98f, 3209.0f},
 };
 
-constexpr RpmVoltagePoint RpmVoltageData[] = {
-    {329.0f, 1.05f},  {347.0f, 1.1f},   {496.0f, 1.5f},
-    {677.0f, 2.0f},   {858.0f, 2.5f},   {1039.0f, 3.0f},
-    {1218.0f, 3.5f},  {1397.0f, 4.0f},  {1577.0f, 4.5f},
-    {1756.0f, 5.0f},  {1933.0f, 5.5f},  {2111.0f, 6.0f},
-    {2290.0f, 6.5f},  {2470.0f, 7.0f},  {2646.0f, 7.5f},
-    {2825.0f, 8.0f},  {3003.0f, 8.5f},  {3183.0f, 9.0f},
-};
-
 constexpr size_t SpeedRpmDataCount =
     sizeof(SpeedRpmData) / sizeof(SpeedRpmData[0]);
-constexpr size_t RpmVoltageDataCount =
-    sizeof(RpmVoltageData) / sizeof(RpmVoltageData[0]);
 
 portMUX_TYPE controlMux = portMUX_INITIALIZER_UNLOCKED;
 WindTunnelControlStatus controlStatus = {
@@ -285,24 +270,50 @@ float mphToRPM(float mph) {
 }
 
 float rpmToVoltage(float rpm) {
-  float rpms[RpmVoltageDataCount];
-  float voltages[RpmVoltageDataCount];
-  for (size_t i = 0; i < RpmVoltageDataCount; ++i) {
-    rpms[i] = RpmVoltageData[i].rpm;
-    voltages[i] = RpmVoltageData[i].voltage;
+  float rpms[DacCalibration::RpmVoltageDataCount];
+  float voltages[DacCalibration::RpmVoltageDataCount];
+  for (size_t i = 0; i < DacCalibration::RpmVoltageDataCount; ++i) {
+    rpms[i] = DacCalibration::RpmVoltageData[i].rpm;
+    voltages[i] = DacCalibration::RpmVoltageData[i].voltage;
   }
 
   float voltage = NAN;
-  return interpolate(rpm, voltage, RpmVoltageData[0].rpm,
-                     RpmVoltageData[RpmVoltageDataCount - 1].rpm, rpms,
-                     voltages, RpmVoltageDataCount)
+  const float firstRpm = DacCalibration::RpmVoltageData[0].rpm;
+  const float lastRpm =
+      DacCalibration::RpmVoltageData[DacCalibration::RpmVoltageDataCount - 1]
+          .rpm;
+  return interpolate(rpm, voltage, firstRpm, lastRpm, rpms, voltages,
+                     DacCalibration::RpmVoltageDataCount)
              ? voltage
              : NAN;
 }
 
 float mphToVoltage(float mph) {
-  const float rpm = mphToRPM(mph);
-  return isfinite(rpm) ? rpmToVoltage(rpm) : NAN;
+  if (!isfinite(mph) || mph < Config::MinTunnelSpeedMph ||
+      mph > Config::MaxTunnelSpeedMph) {
+    return NAN;
+  }
+
+  float speeds[DacCalibration::SpeedVoltageDataCount];
+  float voltages[DacCalibration::SpeedVoltageDataCount];
+  for (size_t i = 0; i < DacCalibration::SpeedVoltageDataCount; ++i) {
+    speeds[i] = DacCalibration::SpeedVoltageData[i].mph;
+    voltages[i] = DacCalibration::SpeedVoltageData[i].voltage;
+  }
+
+  if (mph < speeds[0]) {
+    const float fraction = (mph - speeds[0]) / (speeds[1] - speeds[0]);
+    const float voltage =
+        voltages[0] + fraction * (voltages[1] - voltages[0]);
+    return isfinite(voltage) ? voltage : NAN;
+  }
+
+  float voltage = NAN;
+  return interpolate(mph, voltage, speeds[0],
+                     speeds[DacCalibration::SpeedVoltageDataCount - 1],
+                     speeds, voltages, DacCalibration::SpeedVoltageDataCount)
+             ? voltage
+             : NAN;
 }
 
 void initializeWindTunnelControl() {

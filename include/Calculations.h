@@ -9,6 +9,10 @@ struct MeasurementValues {
   float dragRaw;
   float liftVolts;
   float dragVolts;
+  float liftAdcRaw;
+  float dragAdcRaw;
+  float liftAdcVolts;
+  float dragAdcVolts;
   float liftNewtons;
   float dragNewtons;
   bool hasSample;

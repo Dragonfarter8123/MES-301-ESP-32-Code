@@ -21,14 +21,15 @@
 
 namespace {
 struct TestSettings {
-  float startSpeedMph = 25.0f;
-  float endSpeedMph = 25.0f;
-  float speedIncrementMph = 0.5f;
-  float setpointMph = 25.0f;
-  uint32_t stabilizationSeconds = 10;
+  float startSpeedMph = Config::DefaultTestStartSpeedMph;
+  float endSpeedMph = Config::DefaultTestEndSpeedMph;
+  float speedIncrementMph = Config::DefaultTestSpeedIncrementMph;
+  float setpointMph = Config::DefaultTestStartSpeedMph;
+  uint32_t stabilizationSeconds = Config::DefaultTestMaxSpeedSeconds;
+  uint32_t tunnelSettleSeconds = Config::DefaultTunnelSettleSeconds;
   float steadyStateErrorNewtons = 0.05f;
-  uint16_t movingAverageWindowMs = 1000;
-  uint32_t steadyStateHoldSeconds = 2;
+  uint16_t movingAverageWindowMs = Config::DefaultMovingAverageWindowMs;
+  uint32_t steadyStateHoldSeconds = Config::DefaultSteadyStateHoldSeconds;
   uint16_t sampleRateHz = 20;
   String team;
   String airfoil = "NACA 4424";
@@ -50,10 +51,14 @@ struct TeamRecord {
 struct TestSample {
   uint32_t elapsedMs;
   float setpointMph;
-  float liftRaw;
-  float dragRaw;
-  float liftVolts;
-  float dragVolts;
+  float liftAdcRaw;
+  float dragAdcRaw;
+  float liftAdcVolts;
+  float dragAdcVolts;
+  float liftFilteredCounts;
+  float dragFilteredCounts;
+  float liftFilteredVolts;
+  float dragFilteredVolts;
   float liftNewtons;
   float dragNewtons;
   bool calibrationLoaded;
@@ -61,6 +66,7 @@ struct TestSample {
 
 struct CsvStreamState {
   std::vector<TestSample> samples;
+  TestSettings settings;
   String pending;
   size_t nextSample = 0;
 };
@@ -622,6 +628,7 @@ bool validStartSettings(JsonDocument &document, TestSettings &result) {
   const float endSpeed = document["endSpeed"] | -1.0f;
   const float speedIncrement = document["speedIncrement"] | -1.0f;
   const float stabilizationInput = document["stabilizationSeconds"] | 0.0f;
+  const float tunnelSettleInput = document["tunnelSettleSeconds"] | -1.0f;
   const float steadyErrorInput = document["steadyStateErrorNewtons"] | NAN;
   const float movingAverageWindowInput =
       document["movingAverageWindowMs"] | NAN;
@@ -660,6 +667,9 @@ bool validStartSettings(JsonDocument &document, TestSettings &result) {
   if (!isfinite(stabilizationInput) || stabilizationInput < 1.0f ||
       stabilizationInput > Config::MaxTestDurationSeconds ||
       floorf(stabilizationInput) != stabilizationInput ||
+      !isfinite(tunnelSettleInput) || tunnelSettleInput < 0.0f ||
+      tunnelSettleInput > stabilizationInput ||
+      floorf(tunnelSettleInput) != tunnelSettleInput ||
       (roundf(stepCount) + 1.0f) * stabilizationInput >
           Config::MaxTestDurationSeconds) {
     return false;
@@ -671,7 +681,7 @@ bool validStartSettings(JsonDocument &document, TestSettings &result) {
       movingAverageWindowInput > 10000.0f ||
       floorf(movingAverageWindowInput) != movingAverageWindowInput ||
       !isfinite(steadyStateHoldInput) || steadyStateHoldInput < 1.0f ||
-      steadyStateHoldInput > stabilizationInput ||
+      steadyStateHoldInput + tunnelSettleInput > stabilizationInput ||
       floorf(steadyStateHoldInput) != steadyStateHoldInput) {
     return false;
   }
@@ -686,6 +696,7 @@ bool validStartSettings(JsonDocument &document, TestSettings &result) {
   result.speedIncrementMph = speedIncrement;
   result.setpointMph = startSpeed;
   result.stabilizationSeconds = static_cast<uint32_t>(stabilizationInput);
+  result.tunnelSettleSeconds = static_cast<uint32_t>(tunnelSettleInput);
   result.steadyStateErrorNewtons = steadyErrorInput;
   result.movingAverageWindowMs =
       static_cast<uint16_t>(movingAverageWindowInput);
@@ -754,6 +765,7 @@ void handleStartBody(AsyncWebServerRequest *request, uint8_t *body,
   JsonDocument response;
   response["running"] = true;
   response["stabilizationSeconds"] = requested.stabilizationSeconds;
+  response["tunnelSettleSeconds"] = requested.tunnelSettleSeconds;
   response["setpoint"] = requested.setpointMph;
   addTunnelStatus(response);
   sendJson(request, 200, response);
@@ -1267,6 +1279,7 @@ void handleStatus(AsyncWebServerRequest *request) {
   response["endSpeedMph"] = current.endSpeedMph;
   response["speedIncrementMph"] = current.speedIncrementMph;
   response["stabilizationSeconds"] = current.stabilizationSeconds;
+  response["tunnelSettleSeconds"] = current.tunnelSettleSeconds;
   response["steadyStateErrorNewtons"] = current.steadyStateErrorNewtons;
   response["movingAverageWindowMs"] = current.movingAverageWindowMs;
   response["steadyStateHoldSeconds"] = current.steadyStateHoldSeconds;
@@ -1280,6 +1293,22 @@ void handleStatus(AsyncWebServerRequest *request) {
   sendJson(request, 200, response);
 }
 
+String csvEscapeField(const String &value) {
+  String escaped;
+  escaped.reserve(value.length() + 2);
+  escaped += '"';
+  for (size_t i = 0; i < value.length(); ++i) {
+    const char character = value[i];
+    if (character == '"') {
+      escaped += "\"\"";
+    } else {
+      escaped += character;
+    }
+  }
+  escaped += '"';
+  return escaped;
+}
+
 void handleExport(AsyncWebServerRequest *request) {
   std::shared_ptr<CsvStreamState> stream =
       std::make_shared<CsvStreamState>();
@@ -1288,12 +1317,48 @@ void handleExport(AsyncWebServerRequest *request) {
     return;
   }
   stream->samples = testSamples;
+  stream->settings = settings;
   unlockState();
 
   stream->pending =
-      "elapsed_ms,lift_adc_counts,drag_adc_counts,lift_volts,drag_volts,"
-      "lift_newtons,drag_newtons,calibration_loaded,actual_speed_mph,"
-      "setpoint_mph\r\n";
+      "record_type,setting,value,elapsed_ms,lift_adc_raw_counts,"
+      "drag_adc_raw_counts,lift_adc_raw_volts,drag_adc_raw_volts,"
+      "lift_filtered_counts,drag_filtered_counts,lift_filtered_volts,"
+      "drag_filtered_volts,lift_newtons,drag_newtons,calibration_loaded,"
+      "actual_speed_mph,setpoint_mph\r\n";
+  const TestSettings &test = stream->settings;
+  const float steadyError =
+      test.units == "lbf"
+          ? test.steadyStateErrorNewtons * 0.224809f
+          : test.units == "g"
+                ? test.steadyStateErrorNewtons * 101.9716f
+                : test.steadyStateErrorNewtons;
+  auto appendSetupRow = [&stream](const char *key, const String &value) {
+    stream->pending += "setup,";
+    stream->pending += key;
+    stream->pending += ",";
+    stream->pending += csvEscapeField(value);
+    for (uint8_t i = 0; i < 14; ++i) {
+      stream->pending += ',';
+    }
+    stream->pending += "\r\n";
+  };
+  appendSetupRow("team", test.team);
+  appendSetupRow("test_object", test.airfoil);
+  appendSetupRow("force_units", test.units);
+  appendSetupRow("start_speed_mph", String(test.startSpeedMph, 1));
+  appendSetupRow("end_speed_mph", String(test.endSpeedMph, 1));
+  appendSetupRow("speed_increment_mph", String(test.speedIncrementMph, 1));
+  appendSetupRow("max_time_per_speed_seconds",
+                 String(test.stabilizationSeconds));
+  appendSetupRow("tunnel_settling_seconds", String(test.tunnelSettleSeconds));
+  appendSetupRow("steady_state_error_tolerance", String(steadyError, 6));
+  appendSetupRow("moving_average_window_ms",
+                 String(test.movingAverageWindowMs));
+  appendSetupRow("required_steady_state_seconds",
+                 String(test.steadyStateHoldSeconds));
+  appendSetupRow("logging_sample_rate_hz", String(test.sampleRateHz));
+
   AsyncWebServerResponse *response = request->beginChunkedResponse(
       "text/csv",
       [stream](uint8_t *buffer, size_t maxLength, size_t) -> size_t {
@@ -1304,17 +1369,22 @@ void handleExport(AsyncWebServerRequest *request) {
               break;
             }
             const TestSample &sample = stream->samples[stream->nextSample++];
-            stream->pending = String(sample.elapsedMs);
-            stream->pending += "," + String(sample.liftRaw, 2);
-            stream->pending += "," + String(sample.dragRaw, 2);
-            stream->pending += "," + String(sample.liftVolts, 6);
-            stream->pending += "," + String(sample.dragVolts, 6);
+            stream->pending = "sample,,,";
+            stream->pending += String(sample.elapsedMs);
+            stream->pending += "," + String(sample.liftAdcRaw, 2);
+            stream->pending += "," + String(sample.dragAdcRaw, 2);
+            stream->pending += "," + String(sample.liftAdcVolts, 6);
+            stream->pending += "," + String(sample.dragAdcVolts, 6);
+            stream->pending += "," + String(sample.liftFilteredCounts, 2);
+            stream->pending += "," + String(sample.dragFilteredCounts, 2);
+            stream->pending += "," + String(sample.liftFilteredVolts, 6);
+            stream->pending += "," + String(sample.dragFilteredVolts, 6);
             if (sample.calibrationLoaded) {
               stream->pending += "," + String(sample.liftNewtons, 6);
               stream->pending += "," + String(sample.dragNewtons, 6);
               stream->pending += ",true,,";
             } else {
-              stream->pending += ",,,false,,";
+              stream->pending += ",,false,,";
             }
             stream->pending += String(sample.setpointMph, 1);
             stream->pending += "\r\n";
@@ -1428,9 +1498,12 @@ void updateWebServer() {
     return;
   }
 
-  if (testRunning &&
+  const uint32_t speedElapsedMs = millis() - speedStepStartedAt;
+  const bool tunnelSettleComplete =
+      speedElapsedMs >= settings.tunnelSettleSeconds * 1000U;
+  if (testRunning && tunnelSettleComplete &&
       (steadyStateAchieved ||
-       millis() - speedStepStartedAt >= settings.stabilizationSeconds * 1000U)) {
+       speedElapsedMs >= settings.stabilizationSeconds * 1000U)) {
     const float direction =
         settings.endSpeedMph >= settings.startSpeedMph ? 1.0f : -1.0f;
     const float nextSpeed =
@@ -1467,7 +1540,10 @@ void updateWebServer() {
                                      false)
             : NAN;
     const bool calibrated = isfinite(lift) && isfinite(drag);
-    if (calibrated) {
+    const uint32_t sampleTime = millis();
+    const bool settling =
+        sampleTime - speedStepStartedAt < settings.tunnelSettleSeconds * 1000U;
+    if (calibrated && !settling) {
       updateSteadyState(lift, drag, settings, millis());
     } else {
       resetSteadyStateTracking();
@@ -1477,6 +1553,10 @@ void updateWebServer() {
       testSamples.push_back(
           {lastSampleAt - testStartedAt,
            settings.setpointMph,
+           values.liftAdcRaw,
+           values.dragAdcRaw,
+           values.liftAdcVolts,
+           values.dragAdcVolts,
            values.liftRaw,
            values.dragRaw,
            values.liftVolts,
@@ -1493,6 +1573,13 @@ void updateWebServer() {
       measurement["setpoint"] = settings.setpointMph;
       measurement["speed"] = settings.setpointMph;
       measurement["steadyState"] = steadyState;
+      measurement["settling"] = settling;
+      measurement["settleRemainingSeconds"] =
+          settling
+              ? (settings.tunnelSettleSeconds * 1000U -
+                 (sampleTime - speedStepStartedAt)) /
+                    1000.0f
+              : 0.0f;
       measurement["liftRaw"] = values.liftRaw;
       measurement["dragRaw"] = values.dragRaw;
       measurement["liftVolts"] = values.liftVolts;

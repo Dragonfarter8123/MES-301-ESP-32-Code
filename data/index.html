@@ -12,6 +12,8 @@
       --line: #c9c9c9;
       --paper: #fff;
       --wash: #f3f3f3;
+      --lift-series: #2563eb;
+      --drag-series: #c2410c;
     }
     * { box-sizing: border-box; }
     body { margin: 0; background: var(--wash); color: var(--ink); font: 14px Arial, sans-serif; }
@@ -62,8 +64,8 @@
     th { background: var(--wash); }
     canvas { width: 100%; height: 100%; display: block; }
     .legend { display: flex; gap: 16px; color: var(--muted); font-size: 12px; }
-    .legend span::before { content: ""; display: inline-block; width: 17px; height: 2px; margin: 0 5px 3px 0; background: #111; }
-    .legend .drag::before { background: #888; }
+    .legend span::before { content: ""; display: inline-block; width: 17px; height: 3px; margin: 0 5px 3px 0; background: var(--lift-series); }
+    .legend .drag::before { background: var(--drag-series); }
     .message { min-height: 20px; margin-top: 10px; color: var(--muted); }
     .online { font-weight: bold; white-space: nowrap; }
     .footer { margin-top: 18px; color: var(--muted); font-size: 11px; }
@@ -91,10 +93,9 @@
   <main>
     <nav class="nav" aria-label="Dashboard pages">
       <button class="active" data-page="overview" onclick="showPage('overview')">Overview</button>
-      <button data-page="measurements" onclick="showPage('measurements')">Measurements</button>
+      <button data-page="measurements" onclick="showPage('measurements')">Run Test</button>
       <button data-page="setup" onclick="showPage('setup')">Test Setup</button>
-      <button data-page="dac-test" onclick="showPage('dac-test')">DAC Test</button>
-      <button data-page="manual-control" onclick="showPage('manual-control')">Manual Control</button>
+      <button data-page="realtime-measurement" onclick="showPage('realtime-measurement')">Real-Time Measurement</button>
       <button data-page="calibration" onclick="showPage('calibration')">Calibration</button>
     </nav>
 
@@ -120,7 +121,7 @@
           </div>
           <div class="body actions">
             <button onclick="showPage('setup')">Test Setup</button>
-            <button onclick="showPage('measurements')">View Measurements</button>
+            <button onclick="showPage('measurements')">Run Test</button>
             <button onclick="exportCSV()">Download CSV</button>
           </div>
         </div>
@@ -192,51 +193,32 @@
           <div class="form-grid" style="margin-top: 14px">
             <div>
               <label for="startSpeed">Starting windspeed (mph)</label>
-              <input id="startSpeed" type="number" min="4" max="40" value="25" step="0.5" required>
+              <input id="startSpeed" type="number" min="4" max="40" value="20" step="0.5" required>
             </div>
             <div>
               <label for="endSpeed">Ending windspeed (mph)</label>
-              <input id="endSpeed" type="number" min="20" max="40" value="25" step="0.5" required>
+              <input id="endSpeed" type="number" min="20" max="40" value="40" step="0.5" required>
             </div>
             <div>
               <label for="speedIncrement">Windspeed increment (mph)</label>
-              <input id="speedIncrement" type="number" min="0.5" max="20" value="0.5" step="0.5" required>
+              <input id="speedIncrement" type="number" min="0.5" max="20" value="5" step="0.5" required>
             </div>
           </div>
-          <div class="notice">
-            <strong>Wind Tunnel Control</strong>
-            <div class="rows" style="margin-top: 10px">
-              <span>Requested target</span><span class="value"><span id="tunnelTarget">—</span> mph</span>
-              <span>Estimated fan speed</span><span class="value"><span id="tunnelRpm">—</span> RPM</span>
-              <span>Calculated control voltage</span><span class="value"><span id="tunnelVoltage">—</span> V (not measured output)</span>
-              <span>DAC command sent</span><span class="value"><span id="tunnelCommandedVoltage">—</span></span>
-              <span>DAC status</span><span class="value" id="tunnelDacStatus">Unavailable</span>
-              <span>Control mode</span><span class="value" id="tunnelControlMode">Simulation</span>
-              <span>Tunnel status</span><span class="value" id="tunnelRunning">Stopped</span>
-            </div>
-            <div class="actions" style="margin-top: 10px">
-              <button id="applySpeedBtn" onclick="applyTunnelSpeed()">Apply Speed</button>
-            </div>
-            <div class="message" id="tunnelMessage" role="status">Simulation mode; no physical fan command is sent.</div>
-          </div>
-          <div class="form-grid two">
+          <div class="form-grid" style="margin-top: 14px">
             <div>
               <label for="stabilizationSeconds">Maximum time at each speed (seconds)</label>
-              <input id="stabilizationSeconds" type="number" min="1" max="3600" step="1" value="10" required>
+              <input id="stabilizationSeconds" type="number" min="1" max="3600" step="1" value="120" required>
               <div class="muted">Advances sooner when steady state is reached; this is the per-speed timeout.</div>
             </div>
             <div>
+              <label for="tunnelSettleSeconds">Tunnel speed settling time (seconds)</label>
+              <input id="tunnelSettleSeconds" type="number" min="0" max="3600" step="1" value="5" required>
+              <div class="muted">Steady-state checking and speed changes are paused until this time expires after each speed change.</div>
+            </div>
+            <div>
               <label for="sampleRate">Logging sample rate</label>
-              <div class="value-preset">
-                <input id="sampleRate" type="number" min="1" max="50" step="1" value="20" required aria-label="Logging sample rate in hertz">
-                <select id="sampleRatePreset" aria-label="Logging sample rate presets">
-                  <option value="">Custom value</option>
-                  <option value="10">10 Hz</option>
-                  <option value="20" selected>20 Hz</option>
-                  <option value="50">50 Hz</option>
-                </select>
-              </div>
-              <div class="muted">Enter 1–50 Hz or choose a preset.</div>
+              <input id="sampleRate" type="number" min="1" max="50" step="1" value="20" required aria-label="Logging sample rate in hertz">
+              <div class="muted">Enter 1–50 samples per second.</div>
             </div>
           </div>
           <div class="form-grid" style="margin-top: 14px">
@@ -246,104 +228,44 @@
             </div>
             <div>
               <label for="movingAverageWindow">Moving-average window (seconds)</label>
-              <input id="movingAverageWindow" type="number" min="0.1" max="10" step="0.1" value="1" required>
+              <input id="movingAverageWindow" type="number" min="0.1" max="10" step="0.1" value="5" required>
             </div>
             <div>
               <label for="steadyStateHold">Required steady duration (seconds)</label>
-              <input id="steadyStateHold" type="number" min="1" max="3600" step="1" value="2" required>
+              <input id="steadyStateHold" type="number" min="1" max="3600" step="1" value="10" required>
             </div>
           </div>
-          <div class="notice">Steady state requires both calibrated load-cell readings to stay within the configured force tolerance of their moving averages for the required duration. The sweep advances when steady state is reached or the per-speed timeout expires; a timeout does not indicate steady state.</div>
+          <div class="notice">Steady state requires both calibrated load-cell readings to stay within the configured force tolerance of their moving averages for the required duration. The tunnel settling delay runs first at every speed; then the sweep advances when steady state is reached or the per-speed timeout expires. A timeout does not indicate steady state.</div>
+          <div class="notice">The supplied fan-voltage calibration does not currently cover 40 mph. The default 40 mph endpoint may need updated calibration before the final speed can run.</div>
           <div class="message" id="setupMessage" role="status"></div>
         </div>
       </div>
     </section>
 
-    <section class="page" id="dac-test">
+    <section class="page" id="realtime-measurement">
       <div class="card">
-        <h2>DAC Test</h2>
+        <h2>Real-Time Measurement <span class="muted" id="realtimeStatus">Waiting to connect</span></h2>
         <div class="body">
-          <div class="notice" id="dacBenchPanel" hidden>
-            <strong>DFRobot GP8403 · VOUT0</strong>
-            <div class="muted">Keep the DAC output disconnected from the H-6910 during bench testing. Measure VOUT0 with a multimeter; the ESP32 cannot verify the analog output.</div>
-            <div class="actions" style="margin-top: 10px">
-              <button type="button" onclick="setDacPreset(0)">0 V</button>
-              <button type="button" onclick="setDacPreset(2)">2 V</button>
-              <button type="button" onclick="setDacPreset(5)">5 V</button>
-              <button type="button" onclick="setDacPreset(7)">7 V</button>
-              <button type="button" onclick="setDacPreset(9)">9 V</button>
+          <div class="measurements">
+            <div class="measure">
+              <h3>Lift</h3>
+              <div class="force" id="realtimeLiftVolts">—</div>
+              <div class="raw">ADC counts: <span id="realtimeLiftCounts">—</span></div>
             </div>
-            <div class="form-grid two" style="margin-top: 14px">
-              <div>
-                <label for="dacTestVoltage">Custom output voltage (0–10 V)</label>
-                <input id="dacTestVoltage" type="number" min="0" max="10" step="0.01" value="0" required>
-              </div>
-              <div class="actions" style="align-self: end">
-                <button type="button" onclick="setDacTestVoltage()">Set VOUT0</button>
-                <button type="button" onclick="stopDacBench('dacTestMessage')">Return to 0 V</button>
-              </div>
-            </div>
-            <div class="message" id="dacTestMessage" role="status"></div>
-          </div>
-          <div class="notice" id="dacTestDisabled" hidden>
-            DAC bench testing is disabled in this firmware configuration.
-          </div>
-          <div class="rows">
-            <span>DAC connection</span><span class="value" id="dacTestConnection">Checking…</span>
-            <span>Last command (not measured)</span><span class="value" id="dacTestCommand">—</span>
-            <span>Analog output readback</span><span class="value">Not available; use a multimeter</span>
-          </div>
-          <div class="actions" style="margin-top: 12px">
-            <button id="i2cScanBtn" type="button" onclick="scanI2cBus()">Scan both I²C buses</button>
-          </div>
-          <div class="message" id="i2cScanStatus" role="status"></div>
-          <div class="notice" id="i2cScanResults" style="white-space: pre-line" aria-live="polite">
-            ADS1115/display bus: GPIO 21/22 · expected 0x48/0x2C
-            DAC bus: GPIO 26/27 · expected 0x5F
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="page" id="manual-control">
-      <div class="grid">
-        <div class="card">
-          <h2>Manual Control</h2>
-          <div class="body">
-            <div class="notice">
-              Manual voltage commands are still sent through DAC VOUT0; this is
-              not a hardware bypass. Keep the H-6910 disconnected during
-              testing, and verify output voltage with a multimeter.
-            </div>
-            <div id="manualDacPanel" hidden>
-              <label for="manualDacVoltage">Manual DAC voltage (0–10 V)</label>
-              <input id="manualDacVoltage" type="number" min="0" max="10" step="0.01" value="0" required>
-              <div class="actions" style="margin-top: 10px">
-                <button type="button" onclick="setManualDacVoltage()">Send Manual Voltage</button>
-                <button type="button" onclick="stopDacBench('manualControlMessage')">Return to 0 V</button>
-              </div>
-            </div>
-            <div class="notice" id="manualDacDisabled" hidden>
-              Manual DAC control is disabled in this firmware configuration.
-            </div>
-            <div class="message" id="manualControlMessage" role="status"></div>
-          </div>
-        </div>
-        <div class="card">
-          <h2>Live Raw ADS1115 Data</h2>
-          <div class="body">
-            <p class="muted">Read-only live sensor data. Enabling this display does not change or inject ADC input values.</p>
-            <button id="rawDataToggleBtn" type="button" onclick="toggleRawData()">Enable Live Raw Data</button>
-            <div class="message" id="rawDataStatus" role="status">Live raw data is off.</div>
-            <div class="rows">
-              <span>ADS1115</span><span class="value" id="rawAdsStatus">—</span>
-              <span>Sample sequence</span><span class="value" id="rawSequence">—</span>
-              <span>Lift raw counts</span><span class="value" id="rawLiftCounts">—</span>
-              <span>Lift voltage</span><span class="value" id="rawLiftVolts">—</span>
-              <span>Drag raw counts</span><span class="value" id="rawDragCounts">—</span>
-              <span>Drag voltage</span><span class="value" id="rawDragVolts">—</span>
+            <div class="measure">
+              <h3>Drag</h3>
+              <div class="force" id="realtimeDragVolts">—</div>
+              <div class="raw">ADC counts: <span id="realtimeDragCounts">—</span></div>
             </div>
           </div>
+          <h3>Live Output Voltage · Last 30 Seconds</h3>
+          <div class="muted">Vertical axis: ADS1115 output voltage (mV) · Horizontal axis: time</div>
+          <div class="chart-wrap"><canvas id="realtimeChart" aria-label="Live lift and drag output voltage over the last 30 seconds"></canvas></div>
+          <div class="legend">
+            <span>Lift voltage</span>
+            <span class="drag">Drag voltage</span>
+          </div>
+          <div class="message" id="realtimeDataStatus" role="status">Live readings start automatically while this tab is open.</div>
         </div>
       </div>
     </section>
@@ -380,6 +302,7 @@
           </div>
           <div class="actions" style="margin-top: 12px">
             <button type="button" onclick="saveCalibration()">Save Calibration for Current Team</button>
+            <button type="button" onclick="downloadCalibrationCSV()">Download Calibration CSV</button>
           </div>
           <div class="message" id="calibrationMessage" role="status"></div>
         </div>
@@ -392,13 +315,6 @@
       status: '/api/status',
       start: '/api/start',
       stop: '/api/stop',
-      tunnelSetSpeed: '/api/tunnel/set-speed',
-      tunnelStart: '/api/tunnel/start',
-      tunnelStop: '/api/tunnel/stop',
-      tunnelStatus: '/api/tunnel/status',
-      dacBenchOutput: '/api/tunnel/bench-output',
-      dacBenchStop: '/api/tunnel/bench-stop',
-      i2cScan: '/api/i2c/scan',
       rawInputs: '/api/inputs/raw',
       teams: '/api/teams',
       selectTeam: '/api/team/select',
@@ -406,6 +322,13 @@
       csv: '/api/export.csv'
     };
     const $ = id => document.getElementById(id);
+    const channelColors = (() => {
+      const styles = getComputedStyle(document.documentElement);
+      return {
+        lift: styles.getPropertyValue('--lift-series').trim(),
+        drag: styles.getPropertyValue('--drag-series').trim()
+      };
+    })();
     let running = false;
     let calibrationLoaded = false;
     let samples = [];
@@ -414,10 +337,13 @@
     let measurementReconnectTimer = null;
     let measurementSocketWanted = false;
     let testStateRevision = 0;
+    let hasUndownloadedTest = false;
     let steadyToleranceUnit = 'N';
-    let rawDataEnabled = false;
-    let rawDataTimer = null;
-    let rawDataRequestActive = false;
+    let realtimeActive = false;
+    let realtimeTimer = null;
+    let realtimeRequestActive = false;
+    let realtimeSamples = [];
+    let lastRealtimeSequence = null;
 
     function forceUnitToNewtons(unit) {
       if (unit === 'lbf') return 4.4482216153;
@@ -447,6 +373,23 @@
       document.querySelectorAll('.page').forEach(section => section.classList.toggle('active', section.id === page));
       document.querySelectorAll('.nav button').forEach(button => button.classList.toggle('active', button.dataset.page === page));
       if (page === 'measurements') drawChart();
+      setRealtimeActive(page === 'realtime-measurement');
+    }
+
+    function setRealtimeActive(active) {
+      realtimeActive = active;
+      if (active) {
+        $('realtimeDataStatus').textContent = 'Connecting to the ADS1115…';
+        refreshRealtimeInputs();
+        if (realtimeTimer === null) {
+          realtimeTimer = setInterval(refreshRealtimeInputs, 100);
+        }
+        drawRealtimeChart();
+        return;
+      }
+
+      clearInterval(realtimeTimer);
+      realtimeTimer = null;
     }
 
     function updateMeasurementVisibility() {
@@ -517,6 +460,7 @@
       if (!$('team').value || !$('startSpeed').reportValidity() ||
           !$('endSpeed').reportValidity() || !$('speedIncrement').reportValidity() ||
           !$('stabilizationSeconds').reportValidity() ||
+          !$('tunnelSettleSeconds').reportValidity() ||
           !$('steadyStateError').reportValidity() ||
           !$('movingAverageWindow').reportValidity() ||
           !$('steadyStateHold').reportValidity() ||
@@ -524,10 +468,17 @@
         $('setupMessage').textContent = 'Create or select a team and enter valid sweep settings.';
         return;
       }
-      if (Number($('steadyStateHold').value) > Number($('stabilizationSeconds').value)) {
-        $('steadyStateHold').setCustomValidity('Required steady duration must not exceed the per-speed timeout.');
+      if (Number($('steadyStateHold').value) +
+          Number($('tunnelSettleSeconds').value) >
+          Number($('stabilizationSeconds').value)) {
+        $('steadyStateHold').setCustomValidity('Tunnel settling time plus required steady duration must not exceed the per-speed timeout.');
         $('steadyStateHold').reportValidity();
         $('steadyStateHold').setCustomValidity('');
+        return;
+      }
+      if (hasUndownloadedTest &&
+          !window.confirm('The previous test CSV has not been downloaded. Continue and replace that test data, or cancel to go back and download it first?')) {
+        showPage('measurements');
         return;
       }
       const body = {
@@ -538,6 +489,7 @@
         endSpeed: Number($('endSpeed').value),
         speedIncrement: Number($('speedIncrement').value),
         stabilizationSeconds: Number($('stabilizationSeconds').value),
+        tunnelSettleSeconds: Number($('tunnelSettleSeconds').value),
         steadyStateErrorNewtons:
           Number($('steadyStateError').value) *
           forceUnitToNewtons($('units').value),
@@ -553,8 +505,8 @@
           body: JSON.stringify(body)
         });
         testStateRevision++;
-        updateTunnelStatus(result);
         setRunning(true);
+        hasUndownloadedTest = true;
         connectMeasurementSocket();
         $('setupMessage').textContent = result.controlMode === 'hardware'
           ? 'Test started; DAC command sent, but physical output voltage is not measured.'
@@ -573,7 +525,6 @@
           body: '{}'
         });
         testStateRevision++;
-        updateTunnelStatus(result);
         setRunning(false);
         disconnectMeasurementSocket();
         $('setupMessage').textContent = 'Test stopped. Results remain visible until the next test starts.';
@@ -582,211 +533,52 @@
       }
     }
 
-    function updateTunnelStatus(status) {
-      $('tunnelTarget').textContent = Number.isFinite(Number(status.targetSpeedMph))
-        ? Number(status.targetSpeedMph).toFixed(1)
-        : '—';
-      $('tunnelRpm').textContent = status.estimatedFanRPM !== null &&
-        status.estimatedFanRPM !== undefined && Number.isFinite(Number(status.estimatedFanRPM))
-        ? Number(status.estimatedFanRPM).toFixed(0)
-        : '—';
-      $('tunnelVoltage').textContent = status.calculatedVoltage !== null &&
-        status.calculatedVoltage !== undefined && Number.isFinite(Number(status.calculatedVoltage))
-        ? Number(status.calculatedVoltage).toFixed(2)
-        : '—';
-      $('tunnelCommandedVoltage').textContent = status.commandedVoltage !== null &&
-        status.commandedVoltage !== undefined && Number.isFinite(Number(status.commandedVoltage))
-        ? `${Number(status.commandedVoltage).toFixed(3)} V ${status.commandAccepted ? 'sent' : 'last command (status uncertain)'}`
-        : 'No command';
-      $('tunnelDacStatus').textContent = status.dacConnected
-        ? `Connected (${status.dacType || 'DAC'} ${status.dacAddress || ''})`
-        : 'Unavailable';
-      $('tunnelControlMode').textContent = status.controlMode || 'Simulation';
-      $('tunnelRunning').textContent = status.running
-        ? (status.controlMode === 'hardware' ? 'Running (DAC command)' : 'Running (simulation)')
-        : 'Stopped';
-      $('tunnelMessage').textContent = status.message ||
-        'Simulation mode; no physical fan command is sent.';
-      const benchEnabled = Boolean(status.dacBenchTestEnabled);
-      $('dacBenchPanel').hidden = !benchEnabled;
-      $('dacTestDisabled').hidden = benchEnabled;
-      $('manualDacPanel').hidden = !benchEnabled;
-      $('manualDacDisabled').hidden = benchEnabled;
-      $('dacTestConnection').textContent = status.dacConnected
-        ? `Connected (${status.dacType || 'DAC'} ${status.dacAddress || ''})`
-        : 'Unavailable';
-      $('dacTestCommand').textContent = status.commandedVoltage !== null &&
-        status.commandedVoltage !== undefined && Number.isFinite(Number(status.commandedVoltage))
-        ? `${Number(status.commandedVoltage).toFixed(3)} V`
-        : 'No command';
-    }
-
-    async function sendDacVoltage(inputId, messageId) {
-      const input = $(inputId);
-      if (!input.reportValidity()) return;
-      try {
-        const status = await requestJson(API.dacBenchOutput, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ voltage: Number(input.value) })
-        });
-        updateTunnelStatus(status);
-        $(messageId).textContent =
-          `VOUT0 command sent (${Number(input.value).toFixed(2)} V); verify with a multimeter and keep the tunnel disconnected.`;
-      } catch (error) {
-        $(messageId).textContent = `DAC command failed: ${error.message}`;
-      }
-    }
-
-    function setDacPreset(voltage) {
-      $('dacTestVoltage').value = String(voltage);
-      sendDacVoltage('dacTestVoltage', 'dacTestMessage');
-    }
-
-    function setDacTestVoltage() {
-      sendDacVoltage('dacTestVoltage', 'dacTestMessage');
-    }
-
-    function setManualDacVoltage() {
-      sendDacVoltage('manualDacVoltage', 'manualControlMessage');
-    }
-
-    async function stopDacBench(messageId) {
-      try {
-        const status = await requestJson(API.dacBenchStop, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: '{}'
-        });
-        updateTunnelStatus(status);
-        $(messageId).textContent =
-          '0 V bench command sent; confirm VOUT0 with a multimeter. This does not verify a safe fan stop.';
-      } catch (error) {
-        $(messageId).textContent = `DAC return-to-zero command failed: ${error.message}`;
-      }
-    }
-
-    async function scanI2cBus() {
-      $('i2cScanBtn').disabled = true;
-      $('i2cScanStatus').textContent =
-        'Scanning addresses 0x03–0x77 on both I²C buses…';
-      try {
-        const result = await requestJson(API.i2cScan, { cache: 'no-store' });
-        const sharedDevices = result.adsDisplayBus.devices.length
-          ? result.adsDisplayBus.devices.join(', ')
-          : 'none found';
-        const dacDevices = result.dacBus.devices.length
-          ? result.dacBus.devices.join(', ')
-          : 'none found';
-        const scanLines = [
-          `ADS1115/display bus GPIO ${result.adsDisplayBus.sdaPin}/${result.adsDisplayBus.sclPin}: ${sharedDevices}`,
-          `Expected 0x${Number(result.adsExpectedAddress).toString(16).padStart(2, '0')} ${result.adsExpectedFound ? 'found' : 'NOT FOUND'}`,
-          `DFR0997 address 0x${Number(result.displayAddress).toString(16).padStart(2, '0')} ${result.displayAddressFound ? 'found' : 'NOT FOUND'}`,
-          `DAC bus GPIO ${result.dacBus.sdaPin}/${result.dacBus.sclPin}: ${dacDevices}`,
-          `Expected DAC 0x${Number(result.dacExpectedAddress).toString(16).padStart(2, '0')} ${result.dacExpectedFound ? 'found' : 'NOT FOUND'}`,
-          `DFR0971 driver initialization: ${result.dacInitialized ? 'success' : 'failed'}`,
-          `DFR0997 display initialization: ${result.displayInitialized ? 'detected' : 'NOT DETECTED'}`,
-          'DAC analog output cannot be read over I²C; measure VOUT0 with a multimeter.'
-        ];
-        if (result.adsDisplayBus.scanError || result.dacBus.scanError) {
-          scanLines.push('One or more I²C scan transactions failed.');
-        }
-        if (result.adsDisplayBus.overflow || result.dacBus.overflow) {
-          scanLines.push('More than 32 devices found on a bus; displayed addresses are truncated.');
-        }
-        $('i2cScanResults').textContent = scanLines.join('\n');
-        $('i2cScanStatus').textContent = !result.adsDisplayBus.ready || !result.dacBus.ready
-          ? 'One or both I²C buses could not be started.'
-          : result.adsDisplayBus.scanError || result.dacBus.scanError
-            ? 'I²C scan completed with bus errors; check wiring.'
-            : 'I²C scan complete.';
-        await refreshTunnelStatus();
-      } catch (error) {
-        $('i2cScanStatus').textContent = `I²C scan failed: ${error.message}`;
-      } finally {
-        $('i2cScanBtn').disabled = false;
-      }
-    }
-
-    function toggleRawData() {
-      rawDataEnabled = !rawDataEnabled;
-      $('rawDataToggleBtn').textContent = rawDataEnabled
-        ? 'Disable Live Raw Data'
-        : 'Enable Live Raw Data';
-      if (rawDataEnabled) {
-        $('rawDataStatus').textContent = 'Connecting to the ADS1115…';
-        refreshRawInputs();
-        rawDataTimer = setInterval(refreshRawInputs, 250);
-        return;
-      }
-
-      clearInterval(rawDataTimer);
-      rawDataTimer = null;
-      $('rawDataStatus').textContent = 'Live raw data is off.';
-      $('rawAdsStatus').textContent = '—';
-      $('rawSequence').textContent = '—';
-      $('rawLiftCounts').textContent = '—';
-      $('rawLiftVolts').textContent = '—';
-      $('rawDragCounts').textContent = '—';
-      $('rawDragVolts').textContent = '—';
-    }
-
-    async function refreshRawInputs() {
-      if (!rawDataEnabled || rawDataRequestActive) return;
-      rawDataRequestActive = true;
+    async function refreshRealtimeInputs() {
+      if (!realtimeActive || realtimeRequestActive) return;
+      realtimeRequestActive = true;
       try {
         const data = await requestJson(API.rawInputs, { cache: 'no-store' });
-        if (!rawDataEnabled) return;
-        $('rawAdsStatus').textContent = data.adsAvailable
-          ? 'Connected'
-          : (data.adsError || 'Disconnected');
-        $('rawSequence').textContent = String(data.sequence);
-        $('rawLiftCounts').textContent = data.liftValid ? String(data.liftRaw) : '—';
-        $('rawLiftVolts').textContent = data.liftValid
-          ? `${Number(data.liftVolts).toFixed(6)} V`
-          : '—';
-        $('rawDragCounts').textContent = data.dragValid ? String(data.dragRaw) : '—';
-        $('rawDragVolts').textContent = data.dragValid
-          ? `${Number(data.dragVolts).toFixed(6)} V`
-          : '—';
-        $('rawDataStatus').textContent = data.adsAvailable
-          ? 'Showing live, read-only ADS1115 input data.'
-          : 'ADS1115 input data is unavailable.';
+        if (!realtimeActive) return;
+        if (!data.adsAvailable || !data.liftValid || !data.dragValid) {
+          $('realtimeStatus').textContent = data.adsAvailable
+            ? 'Waiting for valid ADS1115 readings'
+            : 'ADS1115 disconnected';
+          $('realtimeDataStatus').textContent =
+            data.adsError || 'ADS1115 readings are unavailable.';
+          trimRealtimeSamples(Date.now());
+          drawRealtimeChart();
+          return;
+        }
+
+        $('realtimeStatus').textContent = 'ADS1115 connected · live';
+        $('realtimeLiftCounts').textContent = Number(data.liftRaw).toFixed(1);
+        $('realtimeDragCounts').textContent = Number(data.dragRaw).toFixed(1);
+        $('realtimeLiftVolts').textContent =
+          `${(Number(data.liftVolts) * 1000).toFixed(2)} mV`;
+        $('realtimeDragVolts').textContent =
+          `${(Number(data.dragVolts) * 1000).toFixed(2)} mV`;
+        $('realtimeDataStatus').textContent =
+          'Showing live ADS1115 readings; the graph retains the last 30 seconds.';
+        if (data.sequence !== lastRealtimeSequence) {
+          lastRealtimeSequence = data.sequence;
+          realtimeSamples.push({
+            time: Date.now(),
+            lift: Number(data.liftVolts) * 1000,
+            drag: Number(data.dragVolts) * 1000
+          });
+        }
+        trimRealtimeSamples(Date.now());
+        drawRealtimeChart();
       } catch (error) {
-        if (rawDataEnabled) {
-          $('rawDataStatus').textContent = `Could not read ADS1115 data: ${error.message}`;
+        if (realtimeActive) {
+          $('realtimeStatus').textContent = 'ADS1115 unavailable';
+          $('realtimeDataStatus').textContent =
+            `Could not read ADS1115 data: ${error.message}`;
+          trimRealtimeSamples(Date.now());
+          drawRealtimeChart();
         }
       } finally {
-        rawDataRequestActive = false;
-      }
-    }
-
-    async function applyTunnelSpeed() {
-      $('applySpeedBtn').disabled = true;
-      try {
-        const status = await requestJson(API.tunnelSetSpeed, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ targetSpeedMph: Number($('startSpeed').value) })
-        });
-        updateTunnelStatus(status);
-        $('setupMessage').textContent = 'Target calculated. Applying speed does not start the fan.';
-      } catch (error) {
-        $('tunnelTarget').textContent = Number($('startSpeed').value).toFixed(1);
-        $('tunnelRpm').textContent = '—';
-        $('tunnelVoltage').textContent = '—';
-        $('tunnelMessage').textContent = `Could not apply target: ${error.message}`;
-        $('setupMessage').textContent = `Could not apply target: ${error.message}`;
-      } finally {
-        $('applySpeedBtn').disabled = false;
-      }
-    }
-
-    async function refreshTunnelStatus() {
-      try {
-        updateTunnelStatus(await requestJson(API.tunnelStatus, { cache: 'no-store' }));
-      } catch (error) {
-        $('tunnelMessage').textContent = `Tunnel status unavailable: ${error.message}`;
+        realtimeRequestActive = false;
       }
     }
 
@@ -818,9 +610,11 @@
       $('dragValue').textContent = displayForce(data.drag);
       $('liftSteady').textContent = displayForce(data.steadyStateLift);
       $('dragSteady').textContent = displayForce(data.steadyStateDrag);
-      $('steadyStateTestStatus').textContent = data.steadyState
-        ? 'Steady state achieved for the current speed.'
-        : 'Steady state not yet achieved for the current speed.';
+      $('steadyStateTestStatus').textContent = data.settling
+        ? `Waiting for the tunnel to settle at ${Number(data.setpoint).toFixed(1)} mph (${Number(data.settleRemainingSeconds).toFixed(1)} s remaining).`
+        : data.steadyState
+          ? 'Steady state achieved for the current speed.'
+          : 'Steady state not yet achieved for the current speed.';
       $('liftUnit').textContent = data.lift === null ? 'Force unavailable · ADC counts shown' : 'Calibrated force';
       $('dragUnit').textContent = data.drag === null ? 'Force unavailable · ADC counts shown' : 'Calibrated force';
       $('overviewLift').textContent = displayForce(data.lift);
@@ -915,7 +709,6 @@
           if (status.running) connectMeasurementSocket();
           else disconnectMeasurementSocket();
         }
-        refreshTunnelStatus();
       } catch (error) {
         $('connectionText').textContent = 'ESP32 unavailable';
         $('espStatus').textContent = 'Disconnected';
@@ -1113,7 +906,74 @@
       }
     }
 
-    function exportCSV() { window.location.href = API.csv; }
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    async function exportCSV() {
+      const revision = testStateRevision;
+      try {
+        const response = await fetch(API.csv, { cache: 'no-store' });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        downloadBlob(await response.blob(), 'wind-tunnel-data.csv');
+        if (!running && revision === testStateRevision) {
+          hasUndownloadedTest = false;
+        }
+      } catch (error) {
+        window.alert(`Could not download test CSV: ${error.message}`);
+      }
+    }
+
+    function csvCell(value) {
+      return `"${String(value).replace(/"/g, '""')}"`;
+    }
+
+    async function downloadCalibrationCSV() {
+      try {
+        const object = $('calibrationObject').value;
+        const result = await requestJson(
+          `${API.calibration}?object=${encodeURIComponent(object)}`,
+          { cache: 'no-store' }
+        );
+        if (!Array.isArray(result.points) || result.points.length === 0) {
+          $('calibrationMessage').textContent =
+            `No calibration data is available to download for ${object}.`;
+          return;
+        }
+        const rows = [
+          ['team', 'test_object', 'weight_grams', 'lift_volts', 'drag_volts'],
+          ...result.points.map(point => [
+            result.team || '',
+            result.object || object,
+            point.weightGrams,
+            point.liftVolts,
+            point.dragVolts
+          ])
+        ];
+        const csv = rows
+          .map(row => row.map(csvCell).join(','))
+          .join('\r\n') + '\r\n';
+        const filenameObject = object.replace(/[^A-Za-z0-9._-]+/g, '-');
+        downloadBlob(
+          new Blob([csv], { type: 'text/csv;charset=utf-8' }),
+          `calibration-${filenameObject}.csv`
+        );
+        $('calibrationMessage').textContent =
+          `Downloaded ${result.points.length} calibration points for ${result.team || 'the current team'} / ${object}.`;
+      } catch (error) {
+        $('calibrationMessage').textContent =
+          `Could not download calibration CSV: ${error.message}`;
+      }
+    }
 
     function drawChart() {
       const canvas = $('chart');
@@ -1166,11 +1026,10 @@
         const value = maximum - (maximum - minimum) * i / 4;
         context.fillText(value.toFixed(2), pad.left - 6, pad.top + plotHeight * i / 4 + 4);
       }
-      const channelColors = { lift: '#111', drag: '#888' };
       visibleChannels.forEach(key => {
         const color = channelColors[key];
         context.strokeStyle = color;
-        context.lineWidth = 2;
+        context.lineWidth = 2.5;
         context.beginPath();
         samples.forEach((sample, index) => {
           if (index === 0) context.moveTo(x(index), y(sample[key]));
@@ -1188,24 +1047,110 @@
       context.fillText('Sample sequence', pad.left + plotWidth / 2, height - 5);
     }
 
-    function connectPreset(inputId, presetId) {
-      const input = $(inputId);
-      const preset = $(presetId);
-      preset.addEventListener('change', () => {
-        if (preset.value) input.value = preset.value;
-        else input.focus();
-      });
-      input.addEventListener('input', () => {
-        preset.value = Array.from(preset.options).some(option => option.value === input.value)
-          ? input.value
-          : '';
-      });
+    function trimRealtimeSamples(now) {
+      const cutoff = now - 30000;
+      while (realtimeSamples.length > 0 &&
+             realtimeSamples[0].time < cutoff) {
+        realtimeSamples.shift();
+      }
     }
 
-    connectPreset('sampleRate', 'sampleRatePreset');
+    function drawRealtimeChart() {
+      const canvas = $('realtimeChart');
+      const context = canvas.getContext('2d');
+      const bounds = canvas.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+      const now = Date.now();
+      trimRealtimeSamples(now);
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = bounds.width * ratio;
+      canvas.height = bounds.height * ratio;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      const width = bounds.width;
+      const height = bounds.height;
+      context.clearRect(0, 0, width, height);
+      const pad = { left: 52, right: 12, top: 12, bottom: 30 };
+      const plotWidth = width - pad.left - pad.right;
+      const plotHeight = height - pad.top - pad.bottom;
+      const minimumTime = now - 30000;
+      const visibleChannels = ['lift', 'drag'];
+      let minimum = Infinity;
+      let maximum = -Infinity;
+      realtimeSamples.forEach(sample => {
+        visibleChannels.forEach(channel => {
+          minimum = Math.min(minimum, sample[channel]);
+          maximum = Math.max(maximum, sample[channel]);
+        });
+      });
+      if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) {
+        minimum = -1;
+        maximum = 1;
+      } else if (minimum === maximum) {
+        minimum -= 1;
+        maximum += 1;
+      }
+      const margin = (maximum - minimum) * 0.1;
+      minimum -= margin;
+      maximum += margin;
+      const x = time =>
+        pad.left + plotWidth * (time - minimumTime) / 30000;
+      const y = value =>
+        pad.top + plotHeight * (1 - (value - minimum) / (maximum - minimum));
+
+      context.strokeStyle = '#ddd';
+      context.fillStyle = '#555';
+      context.font = '11px Arial';
+      context.textAlign = 'right';
+      for (let i = 0; i <= 4; i++) {
+        const gridY = pad.top + plotHeight * i / 4;
+        const value = maximum - (maximum - minimum) * i / 4;
+        context.beginPath();
+        context.moveTo(pad.left, gridY);
+        context.lineTo(width - pad.right, gridY);
+        context.stroke();
+        context.fillText(value.toFixed(2), pad.left - 6, gridY + 4);
+      }
+      context.textAlign = 'center';
+      for (let seconds = 30; seconds >= 0; seconds -= 10) {
+        const gridX = x(now - seconds * 1000);
+        context.beginPath();
+        context.moveTo(gridX, pad.top);
+        context.lineTo(gridX, height - pad.bottom);
+        context.stroke();
+        context.fillText(seconds === 0 ? 'Now' : `-${seconds}s`,
+          gridX, height - 8);
+      }
+
+      visibleChannels.forEach(channel => {
+        context.strokeStyle = channelColors[channel];
+        context.lineWidth = 2.5;
+        context.beginPath();
+        realtimeSamples.forEach((sample, index) => {
+          if (index === 0) context.moveTo(x(sample.time), y(sample[channel]));
+          else context.lineTo(x(sample.time), y(sample[channel]));
+        });
+        context.stroke();
+      });
+      if (realtimeSamples.length === 0) {
+        context.fillStyle = '#555';
+        context.textAlign = 'center';
+        context.fillText('Waiting for live ADS1115 samples',
+          pad.left + plotWidth / 2, pad.top + plotHeight / 2);
+      }
+      context.save();
+      context.translate(14, pad.top + plotHeight / 2);
+      context.rotate(-Math.PI / 2);
+      context.textAlign = 'center';
+      context.fillText('Voltage (mV)', 0, 0);
+      context.restore();
+    }
+
     updateSteadyStateToleranceUnit();
     updateMeasurementVisibility();
-    window.addEventListener('resize', drawChart);
+    window.addEventListener('resize', () => {
+      drawChart();
+      drawRealtimeChart();
+    });
     refreshStatus();
     refreshTeams();
     setInterval(refreshStatus, 2000);

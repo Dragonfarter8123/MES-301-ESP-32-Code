@@ -102,6 +102,10 @@ void updateMeasurements() {
   lastInputSequence = input.sequence;
 
   MeasurementValues next = {};
+  next.liftAdcRaw = input.lift.raw;
+  next.dragAdcRaw = input.drag.raw;
+  next.liftAdcVolts = input.lift.volts;
+  next.dragAdcVolts = input.drag.volts;
   next.liftRaw = liftRawFilter.add(input.lift.raw);
   next.dragRaw = dragRawFilter.add(input.drag.raw);
   next.liftVolts = liftVoltsFilter.add(input.lift.volts);

@@ -63,6 +63,8 @@ under the default object, NACA 4424, because the older storage format did not
 record an object association.
 Generated calibration weights are editable row by row before saving; the
 weights must remain increasing and include zero.
+The Calibration page can also download the selected team's current
+test-object calibration as a CSV file.
 Uploading a replacement SPIFFS filesystem image can erase locally stored
 teams and calibration records; preserve those values before using `uploadfs`.
 
@@ -87,23 +89,37 @@ readings remain within the configured absolute force tolerance of their
 moving averages for the configured continuous hold duration. The tolerance
 is entered in the selected display unit (Newtons, pounds-force, or
 grams-force) and converted to Newtons for firmware evaluation. The
-moving-average window and hold duration are also user-configurable. The sweep
-advances on steady state or when the maximum time at that speed expires; a
-timeout does not claim stability. Calibration is required for this
-force-based criterion.
+moving-average window and hold duration are also user-configurable. After
+each speed change, the tunnel settling delay must expire before steady-state
+checking or per-speed advancement can occur. The sweep then advances on
+steady state or when the maximum time at that speed expires; a timeout does
+not claim stability. Calibration is required for this force-based criterion.
+
+The dashboard's **Real-Time Measurement** page polls the live ADS1115 data
+while open and graphs lift/drag output voltages over a rolling 30-second
+window. The **Run Test** page shows measurements collected during a test run.
+Test CSV downloads include the captured setup values plus each logged
+unfiltered ADC count and voltage, corresponding filtered counts and voltages,
+and calibrated force when calibration is available. Starting another test
+before downloading the previous test's CSV prompts for confirmation because
+starting the new run replaces its in-memory data.
+Test Setup defaults to 20–40 mph in 5 mph steps, a 120-second maximum per
+speed, a 5-second tunnel settling delay, a 5-second moving-average window,
+and a 10-second steady-state hold. The logging sample-rate input is independent
+of real-time display polling.
 
 ## Wind-tunnel control and DFR0971 DAC
 
 The dashboard accepts typed start speeds from 4–40 mph, end speeds from
 20–40 mph, and an increment in 0.5 mph steps. Start speeds below the first
-measured airspeed point use linear extrapolation from the first two
-airspeed/RPM points; RPM-to-voltage remains limited to its measured range.
-Each speed is held
-until steady state is reached or its configured maximum wait expires. The
-final speed is held for the same condition. The whole sweep is limited to one
-hour. **Apply Speed**
-calculates the estimated RPM and voltage without sending a DAC command. Start
-Test runs the sweep; Stop Test stops it. Wind-tunnel hardware control is
+workbook airspeed point use linear extrapolation from the first two
+speed-to-voltage pairs, down to 4 mph. Estimated fan RPM is calculated
+separately from the airspeed/RPM data.
+Each speed first waits for the configured tunnel settling delay, then is held
+until steady state is reached or its configured maximum time at that speed
+expires. The final speed is held for the same condition. The whole sweep is
+limited to one hour. Start Test runs the sweep; Stop Test stops it.
+Wind-tunnel hardware control is
 disabled by default:
 `TunnelHardwareControlEnabled`, `TunnelSafetyPrerequisitesVerified`, and
 `TunnelSafeStopVerified` are false. On the `dac-bench-test` branch,
@@ -114,12 +130,14 @@ Displayed windspeed is estimated using the tunnel's calibrated
 windspeed-to-fan-speed interpolation (reported fit `R² = 1`). In simulation
 mode this is the requested calibrated setpoint, not a physical output reading.
 
-Interpolation uses the airspeed/RPM and RPM/control-voltage measurements
-provided in the project request. The 4 mph lower limit keeps the extrapolated
-RPM within the measured RPM-to-voltage range. The last airspeed reference,
-39.98 mph, maps to 3209 RPM, above the voltage table's 3183 RPM maximum, so
-40 mph remains unavailable pending additional measurements. For example,
-30 mph calculates to approximately 2415 RPM and 6.85 V.
+The DAC's speed-to-voltage interpolation uses the supplied workbook's
+`Airspeed (mph)` and `Estimated Voltage Control (V)` data, stored in
+`include/DacCalibration.h`. The separate RPM-to-voltage measurements are also
+kept there; estimated fan RPM continues to use the airspeed/RPM data. Speeds
+below the first workbook point are extrapolated from its first two
+speed-to-voltage points down to the configured 4 mph minimum. The last
+workbook point is 39.98 mph, so 40 mph remains unavailable pending additional
+measurements. For example, 30 mph calculates to approximately 6.82 V.
 `MinTunnelSpeedMph`, `MinTunnelEndSpeedMph`, `MaxTunnelSpeedMph`,
 `TunnelSpeedStepMph`, and
 `TunnelStabilizationPeriodMs` are in `include/Config.h`. The stabilization
@@ -159,6 +177,8 @@ DFRobot's DFR0997 I2C example powers the display `+` pin from 5 V and connects
 `-` to common ground. Before wiring either module, confirm its I2C signal
 levels are safe for 3.3 V ESP32 GPIOs; use a suitable bidirectional level
 shifter if SDA or SCL pull-ups rise to 5 V. Do not connect 5 V to ESP32 GPIOs.
+See the [system wiring diagram](./wiring-diagram.svg) for the current pin map,
+shared buses, power notes, differential sensor inputs, and DAC safety boundary.
 
 Keep the DAC's analog VOUT0 disconnected from the H-6910 until the tunnel's
 analog input range, polarity, common reference, enable circuit, and safe-stop
@@ -180,24 +200,18 @@ The hardware emergency stop must remain independent of the ESP32.
    initialization to let its external supply stabilize. Startup only
    initializes and configures the DAC; it does not automatically command a
    test voltage.
-4. Open **DAC Test** and click **Scan both I²C buses**. Expect the ADS1115 at
-   `0x48` and DFR0997 at `0x2C` on GPIO21/22, and the DFR0971 at `0x5F` on
-   GPIO26/27.
-5. Select a 0, 2, 5, 7, or 9 V preset, or enter a custom voltage from 0 to
-   10 V, then press **Set VOUT0**. Measure VOUT0 relative to DAC GND with a
-   multimeter.
-6. Compare the meter reading with the displayed command. The GP8403 DAC has
-   no analog output readback, so the firmware cannot verify actual VOUT0;
-   record the measured values yourself.
-7. Press **Return to 0 V** and confirm the reading with the meter. Keep the
-   H-6910 disconnected; 0 V here is only a bench command and is not certified
-   as the tunnel's safe-stop condition.
-8. Set `DacBenchTestEnabled = false` after bench testing.
+4. Request `GET /api/i2c/scan` and verify the ADS1115 at `0x48` and DFR0997
+   at `0x2C` on GPIO21/22, and the DFR0971 at `0x5F` on GPIO26/27.
+5. With bench mode enabled, send `POST /api/tunnel/bench-output` with a JSON
+   body such as `{"voltage":5}`. Measure VOUT0 relative to DAC GND with a
+   multimeter; the GP8403 DAC has no analog output readback.
+6. Send `POST /api/tunnel/bench-stop` and verify the output is 0 V with the
+   meter. Keep the H-6910 disconnected; this is not a certified safe-stop.
+7. Set `DacBenchTestEnabled = false` after bench testing.
 
-The **Manual Control** page can send a manually entered 0–10 V command through
-the DAC; it does not bypass the DAC or directly control the H-6910. The page's
-**Enable Live Raw Data** button polls and displays the actual ADS1115 raw counts
-and voltages. It is read-only and does not inject or override sensor readings.
+The web dashboard no longer exposes separate DAC bench-test or manual
+DAC-control tabs. DAC bench API routes remain gated by configuration.
+ADS1115 real-time readings are read-only and do not inject or override sensor readings.
 Bench controls are available only when `DacBenchTestEnabled` is true and
 `TunnelHardwareControlEnabled` is false. Bench commands cannot be used
 concurrently with hardware tunnel mode, and a normal tunnel test is blocked
@@ -216,9 +230,9 @@ Tunnel API: `POST /api/tunnel/set-speed` with
 `POST /api/tunnel/bench-stop`. Status distinguishes calculated voltage,
 commanded voltage, and voltage measurement verification. Commanding the DAC
 does not verify its physical output.
-`GET /api/inputs/raw` returns the current ADS1115 raw counts and voltages for
-the live read-only monitor. `GET /api/i2c/scan` scans addresses `0x03`–`0x77`
-on the ADS1115/display bus and separate DAC bus.
+`GET /api/inputs/raw` returns current ADS1115 raw counts and voltages for the
+real-time monitor. `GET /api/i2c/scan` scans addresses `0x03`–`0x77` on the
+ADS1115/display bus and separate DAC bus.
 
 ## Build, upload, and run
 
@@ -251,10 +265,10 @@ API: `GET /`, `GET /api/status`, WebSocket `/api/ws`, `POST /api/start`,
 
 - PlatformIO firmware build: passed.
 - PlatformIO SPIFFS filesystem build: passed.
-- Speed/RPM/voltage interpolation: 25, 30, and 35 mph are within the supplied
-  measurements; 20 mph is below the first airspeed point, and the 39.98 mph
-  reference exceeds the voltage table's RPM range, so 20 and 40 correctly
-  require more calibration data.
+- Workbook speed-to-voltage interpolation: 25, 30, and 35 mph are within the
+  supplied measurements; 20 mph uses a small low-end extrapolation. The
+  workbook ends at 39.98 mph, so 40 mph remains unavailable.
 - DFR0971 output voltage, DAC wiring, H-6910 operation, and steady-state
-  behavior require physical hardware verification; none were tested. DAC
-  bench mode and wind-tunnel hardware mode remain disabled.
+  behavior require physical hardware verification; none were tested.
+  Wind-tunnel hardware control remains disabled; isolated DAC bench mode is
+  enabled but requires an explicit dashboard command.
