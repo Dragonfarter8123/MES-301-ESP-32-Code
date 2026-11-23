@@ -84,6 +84,7 @@ constexpr size_t MaxTeamNameLength = 32;
 constexpr size_t MaxCalibrationPoints = 51;
 constexpr size_t MaxMovingAverageSamples = 500;
 constexpr char StationDataPath[] = "/station.json";
+constexpr uint32_t DisplayRefreshIntervalMs = 5000U;
 
 AsyncWebServer server(80);
 AsyncWebSocket measurementSocket("/api/ws");
@@ -102,6 +103,7 @@ uint32_t lastLoggedSequence = 0;
 uint32_t testStartSequence = 0;
 uint32_t lastWifiAttemptAt = 0;
 uint32_t lastRealtimeInputSentAt = 0;
+uint32_t lastDisplayRefreshAt = 0;
 bool wifiAddressPrinted = false;
 bool spiffsMounted = false;
 String pendingMeasurementBatch;
@@ -1520,6 +1522,15 @@ void updateWebServer() {
         millis() - lastWifiAttemptAt >= 15000U) {
       WiFi.reconnect();
       lastWifiAttemptAt = millis();
+    }
+  }
+
+  if (millis() - lastDisplayRefreshAt >= DisplayRefreshIntervalMs) {
+    lastDisplayRefreshAt = millis();
+    if (WiFi.status() == WL_CONNECTED) {
+      updateNetworkDisplay(WiFi.localIP().toString(), WiFi.SSID());
+    } else {
+      updateNetworkDisplay("0.0.0.0", "Not connected");
     }
   }
 

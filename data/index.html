@@ -31,6 +31,8 @@
     button:disabled { opacity: .45; cursor: not-allowed; }
     .header-actions button { border-color: var(--paper); }
     .header-actions .stop { background: #fff; color: #111; }
+    .internal-testing-toggle { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--paper); font-size: 12px; white-space: nowrap; cursor: pointer; }
+    .internal-testing-toggle input { margin: 0; accent-color: #2563eb; }
     .nav button { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
     .page { display: none; }
     .page.active { display: block; }
@@ -84,6 +86,7 @@
       </div>
       <div class="header-actions">
         <span class="online" id="connectionText">Connecting…</span>
+        <label class="internal-testing-toggle"><input id="internalTestingToggle" type="checkbox" onchange="toggleInternalTesting(this.checked)"> Internal Testing</label>
         <button id="startBtn" onclick="startTest()">Start Test</button>
         <button class="stop" id="stopBtn" onclick="stopTest()" disabled>Stop Test</button>
       </div>
@@ -97,6 +100,7 @@
       <button data-page="setup" onclick="showPage('setup')">Test Setup</button>
       <button data-page="realtime-measurement" onclick="showPage('realtime-measurement')">Real-Time Measurement</button>
       <button data-page="calibration" onclick="showPage('calibration')">Calibration</button>
+      <button id="dacTestTab" data-page="dac-test" onclick="showPage('dac-test')" hidden>DAC Test</button>
     </nav>
 
     <section class="page active" id="overview">
@@ -308,6 +312,33 @@
         </div>
       </div>
     </section>
+
+    <section class="page" id="dac-test">
+      <div class="card">
+        <h2>DAC Internal Test</h2>
+        <div class="body">
+          <div class="notice">Bench testing only. Leave the H-6910 disconnected. DAC output voltage is not read back by the ESP32; verify VOUT0 with a multimeter. Select <strong>Internal Testing</strong> again to hide this tab.</div>
+          <div class="form-grid two">
+            <div>
+              <label for="dacTestVoltage">VOUT0 command (volts)</label>
+              <input id="dacTestVoltage" type="number" min="0" max="10" step="0.1" value="0" required>
+              <div class="muted">DFR0971 output range: 0–10 V.</div>
+            </div>
+            <div>
+              <label>DAC status</label>
+              <div id="dacTestStatus" role="status">No bench command issued.</div>
+              <div class="muted" id="dacTestFeedback"></div>
+            </div>
+          </div>
+          <div class="actions" style="margin-top: 14px">
+            <button type="button" onclick="setDacTestVoltage()">Set VOUT0</button>
+            <button type="button" onclick="stopDacTest()">Return to 0 V / Stop</button>
+            <button type="button" onclick="refreshDacTestStatus()">Refresh DAC status</button>
+          </div>
+          <div class="message" id="dacTestMessage" role="status"></div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <script>
@@ -315,6 +346,9 @@
       status: '/api/status',
       start: '/api/start',
       stop: '/api/stop',
+      dacStatus: '/api/tunnel/status',
+      dacOutput: '/api/tunnel/bench-output',
+      dacStop: '/api/tunnel/bench-stop',
       teams: '/api/teams',
       selectTeam: '/api/team/select',
       calibration: '/api/calibration',
@@ -345,6 +379,7 @@
     let dashboardFullyLoaded = document.readyState === 'complete';
     let realtimeSamples = [];
     let lastRealtimeSequence = null;
+    let internalTestingVisible = false;
 
     function forceUnitToNewtons(unit) {
       if (unit === 'lbf') return 4.4482216153;
@@ -374,7 +409,80 @@
       document.querySelectorAll('.page').forEach(section => section.classList.toggle('active', section.id === page));
       document.querySelectorAll('.nav button').forEach(button => button.classList.toggle('active', button.dataset.page === page));
       if (page === 'measurements') drawChart();
+      if (page === 'dac-test') refreshDacTestStatus();
       setRealtimeActive(page === 'realtime-measurement');
+    }
+
+    function toggleInternalTesting(enabled) {
+      internalTestingVisible = enabled;
+      $('dacTestTab').hidden = !internalTestingVisible;
+      if (internalTestingVisible) {
+        showPage('dac-test');
+      } else if ($('dac-test').classList.contains('active')) {
+        showPage('overview');
+      }
+    }
+
+    function updateDacTestStatus(status) {
+      const voltage = status.commandedVoltage;
+      $('dacTestStatus').textContent = status.benchTestActive
+        ? `Bench command active · ${voltage === null ? 'voltage unreported' : `${Number(voltage).toFixed(2)} V commanded`}`
+        : status.dacConnected
+          ? 'DAC connected · no active bench command'
+          : 'DAC connection not confirmed';
+      $('dacTestFeedback').textContent =
+        status.outputVoltageVerified
+          ? 'Output voltage verified.'
+          : 'Physical VOUT0 voltage is not measured by the ESP32.';
+    }
+
+    async function refreshDacTestStatus() {
+      try {
+        const status = await requestJson(API.dacStatus, { cache: 'no-store' });
+        updateDacTestStatus(status);
+        $('dacTestMessage').textContent = status.dacBenchTestEnabled
+          ? `${status.dacType || 'DAC'} at ${status.dacAddress || 'unknown address'} · output channel ${status.dacChannel ?? 0}.`
+          : 'DAC bench testing is disabled in firmware configuration.';
+      } catch (error) {
+        $('dacTestStatus').textContent = 'DAC status unavailable';
+        $('dacTestMessage').textContent =
+          `Could not read DAC status: ${error.message}`;
+      }
+    }
+
+    async function setDacTestVoltage() {
+      const input = $('dacTestVoltage');
+      if (!input.reportValidity()) return;
+      try {
+        const status = await requestJson(API.dacOutput, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ voltage: Number(input.value) })
+        });
+        updateDacTestStatus(status);
+        $('dacTestMessage').textContent =
+          `DAC command accepted: ${Number(status.commandedVoltage).toFixed(2)} V. Measure VOUT0 with a multimeter; the ESP32 cannot verify it.`;
+      } catch (error) {
+        $('dacTestMessage').textContent =
+          `Could not set DAC output: ${error.message}`;
+      }
+    }
+
+    async function stopDacTest() {
+      try {
+        const status = await requestJson(API.dacStop, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        updateDacTestStatus(status);
+        $('dacTestVoltage').value = '0';
+        $('dacTestMessage').textContent =
+          'Zero-volt command sent and bench mode stopped. Verify VOUT0 with a multimeter.';
+      } catch (error) {
+        $('dacTestMessage').textContent =
+          `Could not stop DAC bench output: ${error.message}`;
+      }
     }
 
     function setRealtimeActive(active) {

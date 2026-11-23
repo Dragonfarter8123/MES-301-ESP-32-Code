@@ -162,6 +162,8 @@ address `0x2C`. After a 1-second startup delay, the display shows only the
 ESP32 IP address and connected Wi-Fi network. The IP uses the library's
 largest documented text size (24 px); labels and network name use 12 px.
 Before Wi-Fi connects, it shows `0.0.0.0` and `Not connected`.
+The firmware rewrites the IP and network labels every five seconds to keep
+the display current and visible.
 At startup the firmware scans GPIO21/GPIO22, prefers the DFR0997 default
 address `0x2C`, and uses another responding address only when it is the sole
 non-ADS1115 device found. The serial monitor reports every responding address
@@ -210,8 +212,10 @@ The hardware emergency stop must remain independent of the ESP32.
    meter. Keep the H-6910 disconnected; this is not a certified safe-stop.
 7. Set `DacBenchTestEnabled = false` after bench testing.
 
-The web dashboard no longer exposes separate DAC bench-test or manual
-DAC-control tabs. DAC bench API routes remain gated by configuration.
+The dashboard's **Internal Testing** checkbox in the header reveals a
+**DAC Test** tab when selected. It supports explicit 0–10 V VOUT0 commands and
+a return-to-zero/stop action. DAC bench API routes remain gated by
+configuration.
 ADS1115 real-time readings are read-only and do not inject or override sensor readings.
 Bench controls are available only when `DacBenchTestEnabled` is true and
 `TunnelHardwareControlEnabled` is false. Bench commands cannot be used
