@@ -143,22 +143,22 @@
           <div class="message" id="steadyStateTestStatus" role="status">Steady state is evaluated during an active test.</div>
           <div class="measurements">
             <div class="measure" id="liftMeasure">
-              <h3>Lift</h3>
+              <h3>Lift · ADS1115 A3</h3>
               <div class="force" id="liftValue">—</div>
               <div id="liftUnit">Force unavailable</div>
-              <div class="raw">ADC: <span id="liftRaw">—</span> counts · Voltage: <span id="liftVolts">—</span> V</div>
+              <div class="raw">Filtered ADC input: <span id="liftRaw">—</span> counts · Amplifier output: <span id="liftVolts">—</span> V</div>
               <div class="raw">Steady-state value: <span id="liftSteady">—</span></div>
             </div>
             <div class="measure" id="dragMeasure">
-              <h3>Drag</h3>
+              <h3>Drag · ADS1115 A0</h3>
               <div class="force" id="dragValue">—</div>
               <div id="dragUnit">Force unavailable</div>
-              <div class="raw">ADC: <span id="dragRaw">—</span> counts · Voltage: <span id="dragVolts">—</span> V</div>
+              <div class="raw">Filtered ADC input: <span id="dragRaw">—</span> counts · Amplifier output: <span id="dragVolts">—</span> V</div>
               <div class="raw">Steady-state value: <span id="dragSteady">—</span></div>
             </div>
           </div>
           <h3>Output Voltage History</h3>
-          <div class="muted">Vertical axis: filtered voltage (mV) · Horizontal axis: sample sequence</div>
+          <div class="muted">Filtered amplifier output voltage (mV) · Horizontal axis: sample sequence</div>
           <div class="message" id="adcSaturationNotice" role="status" hidden>ADC is at its measurement limit; verify analog signal range and hardware wiring.</div>
           <div class="chart-wrap"><canvas id="chart" aria-label="Lift and drag output voltage in millivolts over time"></canvas></div>
           <div class="legend">
@@ -175,6 +175,7 @@
       <div class="card">
         <h2>Test Setup</h2>
         <div class="body">
+          <div class="muted">Sensor chain: two load cells with configured external 10 V excitation; lift amplifier output to ADS1115 A3, drag amplifier output to A0, both referenced to common ground.</div>
           <div class="form-grid">
             <div>
               <label for="team">Team</label>
@@ -197,11 +198,11 @@
           <div class="form-grid" style="margin-top: 14px">
             <div>
               <label for="startSpeed">Starting windspeed (mph)</label>
-              <input id="startSpeed" type="number" min="4" max="40" value="20" step="0.5" required>
+              <input id="startSpeed" type="number" min="4" max="40" value="21" step="0.5" required>
             </div>
             <div>
               <label for="endSpeed">Ending windspeed (mph)</label>
-              <input id="endSpeed" type="number" min="20" max="40" value="40" step="0.5" required>
+              <input id="endSpeed" type="number" min="20" max="40" value="36" step="0.5" required>
             </div>
             <div>
               <label for="speedIncrement">Windspeed increment (mph)</label>
@@ -240,7 +241,7 @@
             </div>
           </div>
           <div class="notice">Steady state requires both calibrated load-cell readings to stay within the configured force tolerance of their moving averages for the required duration. The tunnel settling delay runs first at every speed; then the sweep advances when steady state is reached or the per-speed timeout expires. A timeout does not indicate steady state.</div>
-          <div class="notice">The supplied fan-voltage calibration does not currently cover 40 mph. The default 40 mph endpoint may need updated calibration before the final speed can run.</div>
+          <div class="notice"><strong>Suggested first sweep:</strong> 21, 26, 31, and 36 mph (start 21, end 36, increment 5). These points stay within the supplied calibration range of 20.54–39.98 mph; 40 mph needs updated calibration. Use only speeds approved for your tunnel. Run Test is in simulation on this branch and does not command the fan.</div>
           <div class="message" id="setupMessage" role="status"></div>
         </div>
       </div>
@@ -252,18 +253,20 @@
         <div class="body">
           <div class="measurements">
             <div class="measure">
-              <h3>Lift</h3>
+              <h3>Lift · ADS1115 A3</h3>
               <div class="force" id="realtimeLiftVolts">—</div>
-              <div class="raw">ADC counts: <span id="realtimeLiftCounts">—</span></div>
+              <div class="raw">Amplifier output · raw ADC counts: <span id="realtimeLiftCounts">—</span></div>
             </div>
             <div class="measure">
-              <h3>Drag</h3>
+              <h3>Drag · ADS1115 A0</h3>
               <div class="force" id="realtimeDragVolts">—</div>
-              <div class="raw">ADC counts: <span id="realtimeDragCounts">—</span></div>
+              <div class="raw">Amplifier output · raw ADC counts: <span id="realtimeDragCounts">—</span></div>
             </div>
           </div>
           <h3>Live Output Voltage · Last 30 Seconds</h3>
-          <div class="muted">Vertical axis: ADS1115 output voltage (mV) · Horizontal axis: time</div>
+          <div class="muted">The ADS1115 measures each amplifier output relative to common ground. The configured 10 V load-cell excitation is external and is not an ADC input.</div>
+          <div class="notice">Amplifier outputs are reported below 1 V; meter-check output and common-mode levels against the ADS1115 input limits before connecting.</div>
+          <div class="muted">Vertical axis: raw amplifier output voltage (mV) · Horizontal axis: time</div>
           <div class="chart-wrap"><canvas id="realtimeChart" aria-label="Live lift and drag output voltage over the last 30 seconds"></canvas></div>
           <div class="legend">
             <span>Lift voltage</span>

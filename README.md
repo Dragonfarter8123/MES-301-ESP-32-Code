@@ -1,8 +1,9 @@
 # MES 301 Wind Tunnel
 
 ESP32-WROOM-32 firmware and a SPIFFS-hosted dashboard for two ESP-10 load
-cells. The signal path is ESP-10 -> AD623 -> ADS1115 -> ESP32. Lift and drag
-are read as differential ADS1115 channels by default.
+cells. Each load cell uses a separate AD623 amplifier; the lift amplifier
+output is read single-ended on ADS1115 A3 and the drag output on A0. Both
+amplifier outputs are referenced to common ground.
 
 ## Files and settings
 
@@ -31,20 +32,19 @@ Without this local file, the firmware still builds and starts the web server,
 but does not connect to Wi-Fi.
 
 The default ADC configuration is address `0x48`, SDA 21, SCL 22, gain
-`GAIN_ONE` (±4.096 V differential full scale), and differential A0-A1/A2-A3.
-To test single-ended output wiring, set `UseSingleEndedInputs` to `true` and
-select the lift/drag channels in `Config.h`.
+`GAIN_ONE` (±4.096 V full-scale setting), single-ended lift input A3, and
+single-ended drag input A0. The configured 10 V load-cell excitation is an
+external bridge supply; it is not measured by the ADS1115 and must never be
+connected to an ADS1115 or ESP32 input. The CSV records this configured
+excitation value as setup metadata, not as a measured voltage.
 
 **Check analog voltage compatibility before connecting the AD623 outputs.**
-The ADC was previously configured for only ±0.256 V differential full scale,
-which could clip larger signals in software-visible samples. The gain is now
-`GAIN_ONE` (±4.096 V) to remove that firmware range limit; the graph
-automatically scales to the samples it receives. The analog input pins must
-remain within the ADS1115 supply rails, and common-mode voltage also matters.
-ADC readings near full scale indicate that the physical signal may still be
-outside the configured range. The AD623 supply rails, gain, reference, and
-output range were not provided, so compatibility cannot be confirmed from
-software; verify the amplifier output with a meter before connection.
+Although `GAIN_ONE` selects a ±4.096 V full-scale range, it does not change the
+ADS1115's supply or input-pin limits. The ADS1115 is powered from 3.3 V, so
+verify that each amplifier's output and common-mode voltage are valid for that
+device before connection. The amplifier output range is reported to be below
+1 V, but must be confirmed with a meter. The AD623 supply rails, gain, and
+reference also need to be verified against the actual hardware.
 
 Create teams in the dashboard; team names and the selected team are saved in
 SPIFFS (`/station.json`) and survive restart or power loss. Calibration is
@@ -96,18 +96,22 @@ steady state or when the maximum time at that speed expires; a timeout does
 not claim stability. Calibration is required for this force-based criterion.
 
 The dashboard's **Real-Time Measurement** page streams live ADS1115 data over
-a dedicated WebSocket while open and graphs lift/drag output voltages over a
-rolling 30-second window. The **Run Test** page shows measurements collected
-during a test run.
-Test CSV downloads include the captured setup values plus each logged
-unfiltered ADC count and voltage, corresponding filtered counts and voltages,
-and calibrated force when calibration is available. Starting another test
-before downloading the previous test's CSV prompts for confirmation because
-starting the new run replaces its in-memory data.
-Test Setup defaults to 20–40 mph in 5 mph steps, a 120-second maximum per
-speed, a 5-second tunnel settling delay, a 5-second moving-average window,
-and a 10-second steady-state hold. The logging sample-rate input is independent
-of real-time display polling.
+a dedicated WebSocket while open and graphs raw lift/drag amplifier-output
+voltages over a rolling 30-second window. The **Run Test** page shows filtered
+readings collected during a test run.
+Test CSV downloads use one header and one row per sample. Each row repeats
+test setup values and includes raw and filtered ADC counts, raw and filtered
+amplifier-output voltages, calibrated lift/drag force in Newtons (blank when
+calibration is unavailable), display units, configured excitation, channels,
+and commanded speed setpoint. It does not claim a measured airflow speed.
+`run_complete` and `sample_buffer_truncated` flag an in-progress export or
+data exceeding the in-memory sample limit. Starting another test before
+downloading the previous test's CSV prompts for confirmation because starting
+the new run replaces its in-memory data.
+Test Setup defaults to 21–36 mph in 5 mph steps (21, 26, 31, and 36 mph), a
+120-second maximum per speed, a 5-second tunnel settling delay, a 5-second
+moving-average window, and a 10-second steady-state hold. The logging
+sample-rate input is independent of real-time display polling.
 
 ## Wind-tunnel control and DFR0971 DAC
 
@@ -163,7 +167,9 @@ ESP32 IP address and connected Wi-Fi network. The IP uses the library's
 largest documented text size (24 px); labels and network name use 12 px.
 Before Wi-Fi connects, it shows `0.0.0.0` and `Not connected`.
 The firmware rewrites the IP and network labels every five seconds to keep
-the display current and visible.
+the display current. The installed display library exposes no explicit
+backlight-wake control; periodic redraw is best-effort, so verify that the
+physical display remains lit during a long run.
 At startup the firmware scans GPIO21/GPIO22, prefers the DFR0997 default
 address `0x2C`, and uses another responding address only when it is the sole
 non-ADS1115 device found. The serial monitor reports every responding address
@@ -181,7 +187,7 @@ DFRobot's DFR0997 I2C example powers the display `+` pin from 5 V and connects
 levels are safe for 3.3 V ESP32 GPIOs; use a suitable bidirectional level
 shifter if SDA or SCL pull-ups rise to 5 V. Do not connect 5 V to ESP32 GPIOs.
 See the [system wiring diagram](./wiring-diagram.svg) for the current pin map,
-shared buses, power notes, differential sensor inputs, and DAC safety boundary.
+shared buses, power notes, single-ended sensor inputs, and DAC safety boundary.
 
 Keep the DAC's analog VOUT0 disconnected from the H-6910 until the tunnel's
 analog input range, polarity, common reference, enable circuit, and safe-stop

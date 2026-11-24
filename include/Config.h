@@ -21,10 +21,11 @@ constexpr uint16_t MaxLoggingSampleRateHz = 50;
 constexpr uint8_t DftWindowSamples = 64;
 constexpr uint8_t DftRetainedFrequencyBins = 1;
 
-// Differential mode reads A0-A1 for lift and A2-A3 for drag.
-constexpr bool UseSingleEndedInputs = false;
-constexpr uint8_t LiftSingleEndedChannel = 0;
-constexpr uint8_t DragSingleEndedChannel = 2;
+// Separate amplifier outputs are measured against their shared ground.
+constexpr bool UseSingleEndedInputs = true;
+constexpr uint8_t LiftSingleEndedChannel = 3;
+constexpr uint8_t DragSingleEndedChannel = 0;
+constexpr float ConfiguredLoadCellExcitationVolts = 10.0f;
 
 // Legacy direct-count conversion; the dashboard uses per-team SPIFFS curves.
 constexpr bool CalibrationConfigured = false;
@@ -42,8 +43,8 @@ constexpr float MaxTunnelSpeedMph = 40.0f;
 constexpr float TunnelSpeedStepMph = 0.5f;
 constexpr uint32_t TunnelStabilizationPeriodMs = 8200;
 
-constexpr float DefaultTestStartSpeedMph = 20.0f;
-constexpr float DefaultTestEndSpeedMph = 40.0f;
+constexpr float DefaultTestStartSpeedMph = 21.0f;
+constexpr float DefaultTestEndSpeedMph = 36.0f;
 constexpr float DefaultTestSpeedIncrementMph = 5.0f;
 constexpr uint32_t DefaultTestMaxSpeedSeconds = 120;
 constexpr uint32_t DefaultTunnelSettleSeconds = 5;

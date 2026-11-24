@@ -69,6 +69,8 @@ struct CsvStreamState {
   TestSettings settings;
   String pending;
   size_t nextSample = 0;
+  bool sampleLimitReached = false;
+  bool testRunning = false;
 };
 
 constexpr size_t MaxStartRequestBytes = 1024;
@@ -95,6 +97,7 @@ TestSettings settings;
 std::vector<TeamRecord> teams;
 String currentTeam;
 std::vector<TestSample> testSamples;
+bool testSamplesTruncated = false;
 bool testRunning = false;
 uint32_t testStartedAt = 0;
 uint32_t speedStepStartedAt = 0;
@@ -758,6 +761,7 @@ void handleStartBody(AsyncWebServerRequest *request, uint8_t *body,
 
   settings = requested;
   testSamples.clear();
+  testSamplesTruncated = false;
   resetSteadyStateTracking();
   testRunning = true;
   testStartedAt = millis();
@@ -1349,46 +1353,24 @@ void handleExport(AsyncWebServerRequest *request) {
   }
   stream->samples = testSamples;
   stream->settings = settings;
+  stream->sampleLimitReached = testSamplesTruncated;
+  stream->testRunning = testRunning;
   unlockState();
 
   stream->pending =
-      "record_type,setting,value,elapsed_ms,lift_adc_raw_counts,"
-      "drag_adc_raw_counts,lift_adc_raw_volts,drag_adc_raw_volts,"
-      "lift_filtered_counts,drag_filtered_counts,lift_filtered_volts,"
-      "drag_filtered_volts,lift_newtons,drag_newtons,calibration_loaded,"
-      "actual_speed_mph,setpoint_mph\r\n";
-  const TestSettings &test = stream->settings;
-  const float steadyError =
-      test.units == "lbf"
-          ? test.steadyStateErrorNewtons * 0.224809f
-          : test.units == "g"
-                ? test.steadyStateErrorNewtons * 101.9716f
-                : test.steadyStateErrorNewtons;
-  auto appendSetupRow = [&stream](const char *key, const String &value) {
-    stream->pending += "setup,";
-    stream->pending += key;
-    stream->pending += ",";
-    stream->pending += csvEscapeField(value);
-    for (uint8_t i = 0; i < 14; ++i) {
-      stream->pending += ',';
-    }
-    stream->pending += "\r\n";
-  };
-  appendSetupRow("team", test.team);
-  appendSetupRow("test_object", test.airfoil);
-  appendSetupRow("force_units", test.units);
-  appendSetupRow("start_speed_mph", String(test.startSpeedMph, 1));
-  appendSetupRow("end_speed_mph", String(test.endSpeedMph, 1));
-  appendSetupRow("speed_increment_mph", String(test.speedIncrementMph, 1));
-  appendSetupRow("max_time_per_speed_seconds",
-                 String(test.stabilizationSeconds));
-  appendSetupRow("tunnel_settling_seconds", String(test.tunnelSettleSeconds));
-  appendSetupRow("steady_state_error_tolerance", String(steadyError, 6));
-  appendSetupRow("moving_average_window_ms",
-                 String(test.movingAverageWindowMs));
-  appendSetupRow("required_steady_state_seconds",
-                 String(test.steadyStateHoldSeconds));
-  appendSetupRow("logging_sample_rate_hz", String(test.sampleRateHz));
+      "elapsed_ms,team,test_object,force_display_units,"
+      "configured_load_cell_excitation_v,signal_chain,lift_ads_input,"
+      "drag_ads_input,"
+      "start_speed_mph,end_speed_mph,speed_increment_mph,"
+      "max_time_per_speed_seconds,tunnel_settling_seconds,"
+      "steady_state_tolerance_n,moving_average_window_ms,"
+      "required_steady_state_seconds,logging_sample_rate_hz,"
+      "lift_adc_raw_counts,drag_adc_raw_counts,"
+      "lift_amplifier_output_raw_v,drag_amplifier_output_raw_v,"
+      "lift_adc_filtered_counts,drag_adc_filtered_counts,"
+      "lift_amplifier_output_filtered_v,drag_amplifier_output_filtered_v,"
+      "lift_force_newtons,drag_force_newtons,calibration_loaded,"
+      "setpoint_speed_mph,run_complete,sample_buffer_truncated\r\n";
 
   AsyncWebServerResponse *response = request->beginChunkedResponse(
       "text/csv",
@@ -1400,24 +1382,53 @@ void handleExport(AsyncWebServerRequest *request) {
               break;
             }
             const TestSample &sample = stream->samples[stream->nextSample++];
-            stream->pending = "sample,,,";
-            stream->pending += String(sample.elapsedMs);
-            stream->pending += "," + String(sample.liftAdcRaw, 2);
-            stream->pending += "," + String(sample.dragAdcRaw, 2);
-            stream->pending += "," + String(sample.liftAdcVolts, 6);
-            stream->pending += "," + String(sample.dragAdcVolts, 6);
-            stream->pending += "," + String(sample.liftFilteredCounts, 2);
-            stream->pending += "," + String(sample.dragFilteredCounts, 2);
-            stream->pending += "," + String(sample.liftFilteredVolts, 6);
-            stream->pending += "," + String(sample.dragFilteredVolts, 6);
+            const TestSettings &test = stream->settings;
+            stream->pending = String(sample.elapsedMs);
+            auto appendValue = [&stream](const String &value) {
+              stream->pending += ',';
+              stream->pending += value;
+            };
+            auto appendText = [&stream](const String &value) {
+              stream->pending += ',';
+              stream->pending += csvEscapeField(value);
+            };
+            appendText(test.team);
+            appendText(test.airfoil);
+            appendText(test.units);
+            appendValue(String(Config::ConfiguredLoadCellExcitationVolts, 2));
+            appendText(
+                "Two load cells -> separate amplifiers -> ADS1115; common ground");
+            appendText("A3 single-ended (lift)");
+            appendText("A0 single-ended (drag)");
+            appendValue(String(test.startSpeedMph, 1));
+            appendValue(String(test.endSpeedMph, 1));
+            appendValue(String(test.speedIncrementMph, 1));
+            appendValue(String(test.stabilizationSeconds));
+            appendValue(String(test.tunnelSettleSeconds));
+            appendValue(String(test.steadyStateErrorNewtons, 6));
+            appendValue(String(test.movingAverageWindowMs));
+            appendValue(String(test.steadyStateHoldSeconds));
+            appendValue(String(test.sampleRateHz));
+            appendValue(String(sample.liftAdcRaw, 2));
+            appendValue(String(sample.dragAdcRaw, 2));
+            appendValue(String(sample.liftAdcVolts, 6));
+            appendValue(String(sample.dragAdcVolts, 6));
+            appendValue(String(sample.liftFilteredCounts, 2));
+            appendValue(String(sample.dragFilteredCounts, 2));
+            appendValue(String(sample.liftFilteredVolts, 6));
+            appendValue(String(sample.dragFilteredVolts, 6));
             if (sample.calibrationLoaded) {
-              stream->pending += "," + String(sample.liftNewtons, 6);
-              stream->pending += "," + String(sample.dragNewtons, 6);
-              stream->pending += ",true,,";
+              appendValue(String(sample.liftNewtons, 6));
+              appendValue(String(sample.dragNewtons, 6));
+              appendValue("true");
             } else {
-              stream->pending += ",,false,,";
+              appendValue("");
+              appendValue("");
+              appendValue("false");
             }
-            stream->pending += String(sample.setpointMph, 1);
+            appendValue(String(sample.setpointMph, 1));
+            appendValue(stream->testRunning ? "false" : "true");
+            appendValue(stream->sampleLimitReached ? "true" : "false");
             stream->pending += "\r\n";
           }
 
@@ -1608,6 +1619,8 @@ void updateWebServer() {
            lift,
            drag,
            calibrated});
+    } else {
+      testSamplesTruncated = true;
     }
 
     if (measurementSocket.count() > 0) {

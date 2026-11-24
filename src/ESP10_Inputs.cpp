@@ -81,10 +81,14 @@ bool initializeLoadCellInputs() {
   ads.setDataRate(Config::AdsDataRate);
   setAdsConnected(true);
   setAdsError("");
-  Serial.println("ADS1115 detected; differential gain range is +/- 4.096 V.");
-  Serial.println(Config::UseSingleEndedInputs
-                     ? "ADC inputs: single-ended"
-                     : "ADC inputs: differential lift A0-A1, drag A2-A3");
+  Serial.println("ADS1115 detected; gain full-scale setting is +/- 4.096 V.");
+  if (Config::UseSingleEndedInputs) {
+    Serial.printf("ADC inputs: single-ended lift A%u, drag A%u.\n",
+                  static_cast<unsigned>(Config::LiftSingleEndedChannel),
+                  static_cast<unsigned>(Config::DragSingleEndedChannel));
+  } else {
+    Serial.println("ADC inputs: differential lift A0-A1, drag A2-A3");
+  }
   return true;
 }
 
